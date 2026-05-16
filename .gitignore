@@ -1,0 +1,30 @@
+.env
+bais_system.logs
+portfolio_history.csv
+portfolio_state.json
+__pycache__/
+*.pyc
+investigate_balance.py
+self_audit.py
+test_binance.py
+
+kishar_vault.dat
+
+# Dependencias Node (no subir)
+node_modules/
+*.log
+
+# Carpetas pesadas de agentes
+web_team_memory/
+agentscope_runs/
+*.json.bak
+
+# Archivos de build y entornos virtuales
+venv/
+.venv/
+dist/
+build/
+
+# Archivos temporales OS
+.DS_Store
+Thumbs.db

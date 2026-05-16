@@ -1,0 +1,9 @@
+python-binance
+pandas
+numpy
+requests
+python-dotenv
+fastapi
+uvicorn
+gunicorn
+jinja2
