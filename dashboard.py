@@ -48,11 +48,35 @@ def fetch_binance_state() -> dict:
         qs = f"timestamp={ts}&recvWindow=5000"
         sig = hmac.new(secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': api_key}
-        
-        # 1. Obtener saldos
+        # 1. Obtener saldos de SPOT
         r = req.get(f"{base}/api/v3/account?{qs}&signature={sig}", headers=headers, timeout=8)
         data = r.json()
-        balances = [b for b in data.get('balances', []) if float(b['free']) > 0 or float(b['locked']) > 0]
+        
+        assets = {}
+        if isinstance(data, dict) and 'balances' in data:
+            for b in data['balances']:
+                qty = float(b['free']) + float(b['locked'])
+                if qty > 0: assets[b['asset']] = qty
+                
+        # 1.1 Obtener saldos de FONDOS (Funding)
+        try:
+            r_fund = req.post(f"{base}/sapi/v1/asset/get-funding-asset?{qs}&signature={sig}", headers=headers, timeout=8)
+            fund_data = r_fund.json()
+            if isinstance(fund_data, list):
+                for f in fund_data:
+                    qty = float(f.get('free', 0)) + float(f.get('locked', 0))
+                    if qty > 0: assets[f['asset']] = assets.get(f['asset'], 0.0) + qty
+        except Exception: pass
+        
+        # 1.2 Obtener saldos de EARN
+        try:
+            r_earn = req.get(f"{base}/sapi/v1/simple-earn/flexible/position?{qs}&signature={sig}", headers=headers, timeout=8)
+            earn_data = r_earn.json()
+            if isinstance(earn_data, dict) and 'rows' in earn_data:
+                for row in earn_data['rows']:
+                    qty = float(row.get('totalAmount', 0))
+                    if qty > 0: assets[row['asset']] = assets.get(row['asset'], 0.0) + qty
+        except Exception: pass
         
         usdt_only = 0.0
         total_balance = 0.0
@@ -65,9 +89,7 @@ def fetch_binance_state() -> dict:
         if isinstance(prices_data, list):
             price_map = {item['symbol']: float(item['price']) for item in prices_data if 'symbol' in item}
         
-        for b in balances:
-            asset = b['asset']
-            qty = float(b['free']) + float(b['locked'])
+        for asset, qty in assets.items():
             if asset == 'USDT':
                 usdt_only = qty
                 total_balance += qty
