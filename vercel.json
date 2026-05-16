@@ -14,5 +14,8 @@
   ],
   "env": {
     "PYTHONUNBUFFERED": "1"
-  }
+  },
+  "regions": [
+    "fra1"
+  ]
 }

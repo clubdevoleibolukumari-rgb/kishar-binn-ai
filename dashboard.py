@@ -48,15 +48,40 @@ def fetch_binance_state() -> dict:
         qs = f"timestamp={ts}&recvWindow=5000"
         sig = hmac.new(secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': api_key}
-        r = req.get(f"{base}/api/v3/account?{qs}&signature={sig}",
-                    headers=headers, timeout=8)
+        
+        # 1. Obtener saldos
+        r = req.get(f"{base}/api/v3/account?{qs}&signature={sig}", headers=headers, timeout=8)
         data = r.json()
-        usdt = next((float(b['free']) + float(b['locked'])
-                     for b in data.get('balances', [])
-                     if b['asset'] == 'USDT'), 0.0)
+        balances = [b for b in data.get('balances', []) if float(b['free']) > 0 or float(b['locked']) > 0]
+        
+        usdt_only = 0.0
+        total_balance = 0.0
+        
+        # 2. Obtener precios para conversión
+        prices_req = req.get(f"{base}/api/v3/ticker/price", timeout=8)
+        prices_data = prices_req.json()
+        
+        price_map = {}
+        if isinstance(prices_data, list):
+            price_map = {item['symbol']: float(item['price']) for item in prices_data if 'symbol' in item}
+        
+        for b in balances:
+            asset = b['asset']
+            qty = float(b['free']) + float(b['locked'])
+            if asset == 'USDT':
+                usdt_only = qty
+                total_balance += qty
+            else:
+                symbol = f"{asset}USDT"
+                if symbol in price_map:
+                    total_balance += qty * price_map[symbol]
+                else:
+                    # Si no hay par USDT, intentamos aproximar a 0 o buscar otro par
+                    pass
+                    
         return {
-            "total_balance": round(usdt, 4),
-            "usdt_balance": round(usdt, 4),
+            "total_balance": round(total_balance, 4),
+            "usdt_balance": round(usdt_only, 4),
             "earn_balance": 0.0,
             "grid_balance": 0.0,
             "tier": "CLOUD",
