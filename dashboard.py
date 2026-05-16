@@ -1,9 +1,12 @@
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import os
 import json
+import hmac
+import hashlib
+import time
 import logging
-from datetime import datetime
+import requests as req
 from pydantic import BaseModel
 from ai_orchestrator import AIOrchestrator
 from dotenv import load_dotenv
@@ -14,6 +17,7 @@ app = FastAPI(title="KISHAR-BINN_AI ELITE MONITOR")
 
 # Configuración
 STATE_FILE = "portfolio_state.json"
+IS_CLOUD = os.getenv('RENDER', '') != '' or os.getenv('IS_CLOUD', '') == '1'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Dashboard")
 
@@ -26,15 +30,62 @@ IA_KEYS = {
 }
 orchestrator = AIOrchestrator(IA_KEYS)
 
+# ─── Helper: obtener balance de Binance directamente ───────────
+def fetch_binance_state() -> dict:
+    """Obtiene el estado real desde Binance API cuando corre en la nube."""
+    api_key = os.getenv('BINANCE_API_KEY', '')
+    secret = os.getenv('BINANCE_SECRET_KEY', '')
+    testnet = os.getenv('BINANCE_TESTNET', 'True') == 'True'
+    base = 'https://testnet.binance.vision' if testnet else 'https://api.binance.com'
+    
+    if not api_key or not secret:
+        return {"error": "API keys no configuradas", "total_balance": 0,
+                "usdt_balance": 0, "earn_balance": 0, "grid_balance": 0,
+                "tier": "NO_KEY", "last_ai_decision": "Configura las API keys de Binance",
+                "current_asset": "BTCUSDT"}
+    try:
+        ts = int(time.time() * 1000)
+        qs = f"timestamp={ts}&recvWindow=5000"
+        sig = hmac.new(secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
+        headers = {'X-MBX-APIKEY': api_key}
+        r = req.get(f"{base}/api/v3/account?{qs}&signature={sig}",
+                    headers=headers, timeout=8)
+        data = r.json()
+        usdt = next((float(b['free']) + float(b['locked'])
+                     for b in data.get('balances', [])
+                     if b['asset'] == 'USDT'), 0.0)
+        return {
+            "total_balance": round(usdt, 4),
+            "usdt_balance": round(usdt, 4),
+            "earn_balance": 0.0,
+            "grid_balance": 0.0,
+            "tier": "CLOUD",
+            "last_ai_decision": "Sistema en modo nube — datos en tiempo real de Binance.",
+            "current_asset": "BTCUSDT",
+            "source": "binance_api"
+        }
+    except Exception as e:
+        logger.error(f"Error Binance API: {e}")
+        return {"error": str(e), "total_balance": 0, "usdt_balance": 0,
+                "earn_balance": 0, "grid_balance": 0, "tier": "ERROR",
+                "last_ai_decision": "Error conectando con Binance",
+                "current_asset": "BTCUSDT"}
+
 @app.get("/api/state")
 async def get_state():
+    # En la nube: consultar Binance directamente
+    if IS_CLOUD:
+        return fetch_binance_state()
+    # Local: leer el archivo generado por el bot
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 return json.load(f)
         except:
-            return {"error": "Reading state"}
-    return {"error": "No state file"}
+            return fetch_binance_state()  # fallback
+    return {"total_balance": 0, "usdt_balance": 0, "earn_balance": 0,
+            "grid_balance": 0, "tier": "INIT",
+            "last_ai_decision": "Iniciando sistema...", "current_asset": "BTCUSDT"}
 
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
@@ -458,4 +509,5 @@ async def chat_endpoint(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv('PORT', 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
