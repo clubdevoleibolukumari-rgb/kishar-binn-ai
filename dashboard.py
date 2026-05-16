@@ -120,441 +120,462 @@ def fetch_binance_state() -> dict:
 
 @app.get("/api/state")
 async def get_state():
-    # En la nube: consultar Binance directamente
     if IS_CLOUD:
         return fetch_binance_state()
-    # Local: leer el archivo generado por el bot
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 return json.load(f)
         except:
-            return fetch_binance_state()  # fallback
+            return fetch_binance_state()
     return {"total_balance": 0, "usdt_balance": 0, "earn_balance": 0,
             "grid_balance": 0, "tier": "INIT",
             "last_ai_decision": "Iniciando sistema...", "current_asset": "BTCUSDT"}
 
+# ─── Señales de Trading en Tiempo Real ────────────────────────────────────────
+_sig_cache = {"data": [], "ts": 0}
+
+def compute_signals() -> list:
+    """Calcula señales técnicas desde klines de Binance (15m, 20 velas).
+    Retorna lista ordenada por confianza descendente."""
+    base = "https://api.binance.com"
+    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT"]
+    out = []
+    for sym in symbols:
+        try:
+            r = req.get(f"{base}/api/v3/klines?symbol={sym}&interval=15m&limit=20", timeout=6)
+            klines = r.json()
+            if not isinstance(klines, list) or len(klines) < 5:
+                continue
+            closes  = [float(k[4]) for k in klines]
+            volumes = [float(k[5]) for k in klines]
+            cur = closes[-1]; prev = closes[-2]; first = closes[0]
+            chg = (cur - prev) / prev * 100
+            trend = (cur - first) / first * 100
+            # RSI simplificado
+            gains  = [max(closes[i]-closes[i-1],0) for i in range(1,len(closes))]
+            losses = [max(closes[i-1]-closes[i],0) for i in range(1,len(closes))]
+            ag = sum(gains)/len(gains) if gains else 0
+            al = sum(losses)/len(losses) if losses else 1
+            rsi = 100 - 100/(1 + ag/al) if al else 50
+            avg_vol = sum(volumes[:-1])/max(len(volumes)-1,1)
+            vol_r = volumes[-1]/avg_vol if avg_vol else 1
+            # Señal
+            sig = "NEUTRO"; conf = 45.0
+            if rsi < 32 and vol_r > 1.1:
+                sig = "COMPRA"; conf = min(88, 62+(32-rsi)*0.9+vol_r*4)
+            elif rsi > 68 and vol_r > 1.1:
+                sig = "VENTA"; conf = min(88, 62+(rsi-68)*0.9+vol_r*4)
+            elif trend > 1.8 and vol_r > 1.3:
+                sig = "COMPRA"; conf = min(78, 55+trend*3+vol_r*3)
+            elif trend < -1.8 and vol_r > 1.3:
+                sig = "VENTA"; conf = min(78, 55+abs(trend)*3+vol_r*3)
+            else:
+                conf = max(35, 40+vol_r*4)
+            out.append({"symbol":sym,"price":round(cur,4),"change_pct":round(chg,2),
+                        "trend_pct":round(trend,2),"rsi":round(rsi,1),
+                        "volume_ratio":round(vol_r,2),
+                        "volume_usdt":round(volumes[-1]*cur,0),
+                        "signal":sig,"confidence":round(conf,1)})
+        except Exception as e:
+            logger.warning(f"Signal {sym}: {e}")
+    out.sort(key=lambda x: x["confidence"], reverse=True)
+    return out
+
+@app.get("/api/signals")
+async def get_signals():
+    """Devuelve señales de trading con confianza. Caché de 30s."""
+    global _sig_cache
+    if time.time() - _sig_cache["ts"] > 30:
+        _sig_cache = {"data": compute_signals(), "ts": time.time()}
+    return {"signals": _sig_cache["data"], "updated_at": int(_sig_cache["ts"])}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
-    html_content = """<!DOCTYPE html>
+    html_content = """
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>KISHAR-BINN_AI</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>KISHAR-BINN AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
+<script src="https://s3.tradingview.com/tv.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0E0E0F;--surface:#161618;--surface2:#202024;
-  --brand:#3B82F6;--brand-light:#60A5FA;
-  --money:#10B981;--money-light:#34D399;
-  --text:#F3F4F6;--text-muted:#9CA3AF;--text-dim:#4B5563;
-  --border:rgba(255,255,255,0.08);
-  --radius:12px;
-}
-html,body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;min-height:100vh;overflow-x:hidden}
-body{
-  background-image:linear-gradient(rgba(255,255,255,0.015) 1px,transparent 1px),
-                   linear-gradient(90deg,rgba(255,255,255,0.015) 1px,transparent 1px);
-  background-size:32px 32px;
-  padding-bottom:64px; /* espacio para bottom nav en móvil */
-}
-/* ─ Scrollbar ─ */
-::-webkit-scrollbar{width:4px;height:4px}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:4px}
-/* ─ Glassmorphism ─ */
-.card{
-  background:rgba(22,22,24,0.85);
-  border:1px solid var(--border);
-  border-radius:var(--radius);
-  backdrop-filter:blur(12px);
-  transition:border-color .2s;
-}
-.card:hover{border-color:rgba(59,130,246,0.3)}
-/* ─ Layout wrapper ─ */
-.wrapper{max-width:1400px;margin:0 auto;padding:12px 12px 0}
-/* ─ Header ─ */
-header{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:10px 14px;margin-bottom:12px;
-}
+:root{--bg:#0E0E0F;--s1:#161618;--s2:#202024;--br:#3B82F6;--gr:#10B981;--rd:#f87171;--tx:#F3F4F6;--mu:#9CA3AF;--brd:rgba(255,255,255,0.08);--rad:12px}
+body{background:var(--bg);color:var(--tx);font-family:'Inter',sans-serif;overflow-x:hidden;padding-bottom:64px}
+body{background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);background-size:32px 32px}
+::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+/* HEADER */
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(22,22,24,.95);border-bottom:1px solid var(--brd);position:sticky;top:0;z-index:50;backdrop-filter:blur(12px)}
 .logo{display:flex;align-items:center;gap:10px}
-.logo-icon{
-  width:38px;height:38px;border-radius:10px;
-  background:linear-gradient(135deg,var(--brand),#1d4ed8);
-  display:flex;align-items:center;justify-content:center;
-  font-weight:700;font-size:15px;color:#fff;flex-shrink:0;
-}
-.logo-text h1{font-size:16px;font-weight:700;color:#fff;line-height:1.2}
-.logo-text p{font-size:10px;color:var(--text-muted)}
-.status-pill{
-  display:flex;align-items:center;gap:6px;
-  background:var(--surface);border:1px solid var(--border);
-  padding:5px 10px;border-radius:999px;font-size:11px;color:var(--text-muted);
-  white-space:nowrap;
-}
-.dot{
-  width:7px;height:7px;border-radius:50%;background:var(--money);
-  box-shadow:0 0 6px var(--money);animation:pulse 2s infinite;
-}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-/* ─ Tab bar (desktop) ─ */
-.tab-bar{
-  display:flex;gap:4px;margin-bottom:12px;
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:10px;padding:4px;
-}
-.tab-btn{
-  flex:1;padding:7px 10px;border:none;border-radius:7px;
-  background:transparent;color:var(--text-muted);
-  font-size:11px;font-weight:600;cursor:pointer;
-  transition:all .2s;font-family:'Inter',sans-serif;
-}
-.tab-btn.active{background:var(--brand);color:#fff}
-/* ─ Sections ─ */
-.section{display:none}
-.section.active{display:block}
-/* ─ Metrics row (scroll horizontal en móvil) ─ */
-.metrics-row{
-  display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;
-  scrollbar-width:none;
-}
-.metrics-row::-webkit-scrollbar{display:none}
-.metric-card{
-  min-width:140px;flex:1;padding:12px 14px;
-}
-.metric-label{font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
-.metric-value{font-size:22px;font-weight:700;color:#fff;line-height:1}
-.metric-sub{font-size:10px;margin-top:4px}
-.badge{
-  display:inline-block;font-size:9px;font-family:'Fira Code',monospace;
-  padding:2px 6px;border-radius:4px;
-  background:var(--surface2);border:1px solid var(--border);color:var(--text-muted);
-}
-/* ─ Bars ─ */
-.bar-row{margin-bottom:6px}
-.bar-header{display:flex;justify-content:space-between;font-size:10px;font-weight:500;margin-bottom:4px;color:var(--text-muted)}
-.bar-header span:last-child{font-family:'Fira Code',monospace;color:#fff}
-.bar-track{height:5px;background:var(--surface2);border-radius:999px;overflow:hidden}
-.bar-fill{height:100%;border-radius:999px;transition:width .5s}
-/* ─ Desktop 2-col grid ─ */
-@media(min-width:768px){
-  body{padding-bottom:0}
-  .wrapper{padding:16px 16px 16px}
-  .bottom-nav{display:none!important}
-  .tab-bar{display:none}
-  .section{display:block!important}
-  .desktop-grid{display:grid;grid-template-columns:1fr 380px;gap:12px;align-items:start}
-  .metrics-row{overflow-x:visible}
-  .metric-card{min-width:0}
-}
-/* ─ AI Decision ─ */
-.ai-box{padding:12px 14px;position:relative;overflow:hidden;margin-bottom:12px}
-.ai-box::before{
-  content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
-  background:linear-gradient(to bottom,var(--brand-light),var(--brand));
-}
-.ai-label{font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;display:flex;align-items:center;gap:5px}
-.ai-text{font-size:12px;color:#e2e8f0;line-height:1.6;font-weight:500}
-/* ─ Log terminal ─ */
-.log-box{height:160px;overflow-y:auto;font-size:10px;font-family:'Fira Code',monospace;color:var(--text-muted);padding:10px 12px;background:rgba(0,0,0,0.3);border-radius:0 0 var(--radius) var(--radius)}
-.log-header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted)}
-.log-entry{margin-bottom:4px;line-height:1.4}
-.log-time{color:var(--text-dim)}
-.log-ok{color:var(--money-light)}
-.log-err{color:#f87171}
-/* ─ Chart ─ */
-.chart-wrap{border-radius:var(--radius);overflow:hidden;height:280px;position:relative;margin-bottom:12px}
-@media(min-width:768px){.chart-wrap{height:380px}}
-/* ─ Chat ─ */
-.chat-wrap{display:flex;flex-direction:column;height:360px;@media(min-width:768px){height:420px}}
-.chat-header{padding:10px 14px;border-bottom:1px solid var(--border);background:rgba(22,22,24,0.9)}
-.chat-header h3{font-size:13px;font-weight:700;color:#fff}
-.chat-model{font-size:9px;color:var(--brand-light);font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
-.chat-messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
-.msg-wrap{display:flex;flex-direction:column;gap:3px}
-.msg-wrap.user{align-items:flex-end}
-.msg-sender{font-size:9px;font-weight:600;color:var(--text-dim);padding:0 4px;letter-spacing:.06em}
-.msg-bubble{
-  font-size:12px;line-height:1.5;padding:8px 12px;
-  border-radius:12px;max-width:88%;word-break:break-word;
-}
-.msg-bubble.ai{background:var(--surface);border:1px solid var(--border);color:#e2e8f0;border-top-left-radius:3px}
-.msg-bubble.user-b{background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.25);color:#bfdbfe;border-top-right-radius:3px}
-.msg-bubble.error{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);color:#fca5a5}
-.chat-input-row{padding:8px 10px;border-top:1px solid var(--border);background:rgba(22,22,24,0.8);display:flex;gap:8px;align-items:center}
-.chat-input-row input{
-  flex:1;background:var(--bg);border:1px solid var(--border);
-  border-radius:8px;padding:9px 12px;font-size:12px;color:#fff;
-  font-family:'Inter',sans-serif;outline:none;min-width:0;
-}
-.chat-input-row input:focus{border-color:rgba(59,130,246,0.5)}
-.chat-input-row input::placeholder{color:var(--text-dim)}
-.send-btn{
-  width:34px;height:34px;border-radius:8px;border:none;flex-shrink:0;
-  background:var(--brand);color:#fff;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;transition:background .2s;
-}
-.send-btn:hover{background:var(--brand-light)}
-.bounce-dot{width:6px;height:6px;border-radius:50%;background:var(--brand-light);animation:bounce .8s ease-in-out infinite}
-.bounce-dot:nth-child(2){animation-delay:.15s}
-.bounce-dot:nth-child(3){animation-delay:.3s}
-@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-/* ─ Bottom nav (solo móvil) ─ */
-.bottom-nav{
-  position:fixed;bottom:0;left:0;right:0;z-index:100;
-  display:flex;
-  background:rgba(22,22,24,0.97);
-  border-top:1px solid var(--border);
-  backdrop-filter:blur(16px);
-  height:60px;
-}
-.nav-item{
-  flex:1;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:3px;border:none;background:transparent;
-  color:var(--text-dim);cursor:pointer;font-size:10px;font-weight:600;
-  font-family:'Inter',sans-serif;transition:color .2s;
-}
-.nav-item.active{color:var(--brand-light)}
-.nav-item svg{width:20px;height:20px}
+.logo-ic{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#3B82F6,#1d4ed8);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff}
+.logo h1{font-size:15px;font-weight:700;color:#fff;line-height:1.2}
+.logo p{font-size:9px;color:var(--mu)}
+.hdr-right{display:flex;align-items:center;gap:8px}
+.pill{display:flex;align-items:center;gap:6px;background:var(--s1);border:1px solid var(--brd);padding:4px 10px;border-radius:999px;font-size:10px;color:var(--mu)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--gr);box-shadow:0 0 6px var(--gr);animation:blink 2s infinite}
+.sym-badge{background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.35);border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#60A5FA;font-family:'Fira Code',monospace}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+/* CHART - full width, right below header */
+.chart-block{width:100%;height:320px;background:var(--s1);border-bottom:1px solid var(--brd)}
+@media(min-width:768px){.chart-block{height:420px}}
+/* MAIN GRID */
+.main{max-width:1400px;margin:0 auto;padding:12px}
+@media(min-width:900px){.grid2{display:grid;grid-template-columns:1fr 360px;gap:12px;align-items:start}}
+/* CARDS */
+.card{background:rgba(22,22,24,.85);border:1px solid var(--brd);border-radius:var(--rad);backdrop-filter:blur(10px);margin-bottom:12px;transition:border-color .2s}
+.card:hover{border-color:rgba(59,130,246,.3)}
+.card-hdr{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--brd);background:rgba(0,0,0,.25)}
+.card-hdr span{font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.07em}
+/* METRICS STRIP */
+.metrics{display:flex;gap:10px;overflow-x:auto;margin-bottom:12px;scrollbar-width:none}
+.metrics::-webkit-scrollbar{display:none}
+.mc{min-width:130px;flex:1;padding:12px 14px}
+.ml{font-size:9px;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.mv{font-size:20px;font-weight:700;color:#fff;line-height:1}
+.ms{font-size:10px;margin-top:4px;color:var(--mu)}
+/* SIGNALS */
+.sig-item{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:background .15s}
+.sig-item:hover{background:rgba(59,130,246,.06)}
+.sig-item:last-child{border-bottom:none}
+.sig-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.sig-sym{font-size:12px;font-weight:700;color:#fff;font-family:'Fira Code',monospace}
+.sig-price{font-size:11px;color:#e2e8f0;font-family:'Fira Code',monospace}
+.badge{font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px}
+.badge.buy{background:rgba(16,185,129,.15);color:#10B981;border:1px solid rgba(16,185,129,.3)}
+.badge.sell{background:rgba(248,113,113,.15);color:#f87171;border:1px solid rgba(248,113,113,.3)}
+.badge.neut{background:rgba(99,102,241,.15);color:#818CF8;border:1px solid rgba(99,102,241,.3)}
+.bar-row{margin:4px 0}
+.bar-lbl{display:flex;justify-content:space-between;font-size:9px;color:#6B7280;margin-bottom:3px}
+.bar-lbl b{color:var(--mu)}
+.bar-tr{height:4px;background:rgba(255,255,255,.06);border-radius:999px;overflow:hidden}
+.bar-fi{height:100%;border-radius:999px;transition:width .6s}
+.sig-stats{display:flex;gap:12px;font-size:9px;color:#6B7280;margin-top:4px}
+.sig-stats b{color:var(--mu)}
+/* AI BOX */
+.ai-box{padding:12px 14px;border-left:3px solid var(--br)}
+.ai-lbl{font-size:9px;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.ai-txt{font-size:12px;color:#e2e8f0;line-height:1.6}
+/* LOG */
+.log-box{height:140px;overflow-y:auto;font-size:10px;font-family:'Fira Code',monospace;color:var(--mu);padding:10px 12px;background:rgba(0,0,0,.3)}
+.le{margin-bottom:4px;line-height:1.4}.lt{color:#374151}.lok{color:#34D399}.ler{color:#f87171}
+/* CHAT */
+.chat-wrap{display:flex;flex-direction:column;height:380px}
+.chat-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.mb{font-size:12px;line-height:1.5;padding:8px 12px;border-radius:12px;max-width:88%;word-break:break-word}
+.mb.ai{background:var(--s1);border:1px solid var(--brd);color:#e2e8f0}
+.mb.usr{background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.25);color:#bfdbfe;align-self:flex-end}
+.mb.err{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);color:#fca5a5}
+.chat-inp{display:flex;gap:8px;padding:8px;border-top:1px solid var(--brd)}
+.chat-inp input{flex:1;background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:9px 12px;font-size:12px;color:#fff;outline:none;font-family:'Inter',sans-serif}
+.chat-inp input:focus{border-color:rgba(59,130,246,.5)}
+.send-btn{width:36px;height:36px;border:none;border-radius:8px;background:var(--br);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.send-btn:hover{background:#60A5FA}
+/* BOTTOM NAV mobile */
+.bnav{position:fixed;bottom:0;left:0;right:0;display:flex;background:rgba(22,22,24,.97);border-top:1px solid var(--brd);backdrop-filter:blur(16px);height:60px;z-index:100}
+.ni{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:none;background:transparent;color:#4B5563;font-size:10px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer}
+.ni.active{color:#60A5FA}
+.ni svg{width:20px;height:20px}
+.sec{display:none}.sec.on{display:block}
+@media(min-width:900px){body{padding-bottom:0}.bnav{display:none}.sec{display:block!important}}
 </style>
 </head>
 <body>
-<div class="wrapper">
-  <!-- Header -->
-  <header class="card">
-    <div class="logo">
-      <div class="logo-icon">KB</div>
-      <div class="logo-text">
-        <h1>KISHAR-BINN_AI</h1>
-        <p>Institutional Quant · Core v2.0</p>
-      </div>
+<!-- HEADER: Logo, par activo, estado live -->
+<header class="hdr">
+  <div class="logo">
+    <div class="logo-ic">KB</div>
+    <div>
+      <h1>KISHAR-BINN AI</h1>
+      <p>Sistema Cuantitativo Institucional v2.0</p>
     </div>
-    <div class="status-pill">
-      <span class="dot"></span>
-      <span id="sync-status">Live</span>
-    </div>
-  </header>
+  </div>
+  <div class="hdr-right">
+    <!-- Par activo actualizado en tiempo real -->
+    <div class="sym-badge" id="active-sym">BTCUSDT</div>
+    <div class="pill"><span class="dot"></span><span id="live-lbl">Live</span></div>
+  </div>
+</header>
 
-  <!-- Tab bar (desktop only via CSS) -->
-  <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('overview')">Resumen</button>
-    <button class="tab-btn" onclick="showTab('chart')">Gráfico</button>
-    <button class="tab-btn" onclick="showTab('chat')">Terminal IA</button>
+<!-- CHART: Gráfico TradingView justo debajo del header -->
+<div class="chart-block" id="tv_chart"></div>
+
+<!-- MAIN CONTENT -->
+<div class="main">
+  <!-- Tabs solo móvil -->
+  <div class="bnav">
+    <button class="ni active" id="n0" onclick="st(0)">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Resumen
+    </button>
+    <button class="ni" id="n1" onclick="st(1)">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      Señales
+    </button>
+    <button class="ni" id="n2" onclick="st(2)">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+      Terminal
+    </button>
   </div>
 
-  <!-- Desktop grid wrapper -->
-  <div class="desktop-grid">
-
-    <!-- LEFT COLUMN -->
+  <div class="grid2">
+    <!-- COLUMNA IZQUIERDA -->
     <div>
-      <!-- Section: Overview -->
-      <div class="section active" id="sec-overview">
-        <!-- Metrics row (scrollable on mobile) -->
-        <div class="metrics-row">
-          <div class="card metric-card">
-            <div class="metric-label">Net Worth</div>
-            <div class="metric-value" id="total-balance">$0.00</div>
-            <div class="metric-sub" style="color:var(--money-light)">▲ Capital Global</div>
+      <!-- SECCIÓN 0: Resumen -->
+      <div class="sec on" id="s0">
+        <!-- Métricas de balance -->
+        <div class="metrics">
+          <div class="card mc">
+            <div class="ml">Net Worth</div>
+            <div class="mv" id="total-balance">$0.00</div>
+            <div class="ms" style="color:#34D399">Capital Global</div>
           </div>
-          <div class="card metric-card">
-            <div class="metric-label">Libre (USDT)</div>
-            <div class="metric-value" id="free-balance">$0.00</div>
-            <div class="metric-sub" style="color:var(--text-muted)">Disponible</div>
+          <div class="card mc">
+            <div class="ml">Libre USDT</div>
+            <div class="mv" id="free-balance">$0.00</div>
+            <div class="ms">Disponible</div>
           </div>
-          <div class="card metric-card">
-            <div class="metric-label">Tier <span class="badge" id="tier-badge">—</span></div>
-            <div class="bar-row" style="margin-top:10px">
-              <div class="bar-header"><span>Earn</span><span id="earn-balance">$0.00</span></div>
-              <div class="bar-track"><div class="bar-fill" style="background:#6366f1;width:70%"></div></div>
-            </div>
-            <div class="bar-row" style="margin-top:8px">
-              <div class="bar-header"><span>Grid</span><span id="grid-balance">$0.00</span></div>
-              <div class="bar-track"><div class="bar-fill" style="background:var(--brand);width:50%"></div></div>
-            </div>
+          <div class="card mc">
+            <div class="ml">Tier <span id="tier-badge" style="font-size:9px;background:#202024;border:1px solid rgba(255,255,255,.08);padding:1px 6px;border-radius:4px;font-family:'Fira Code',monospace">—</span></div>
+            <div class="mv" id="earn-balance" style="font-size:14px;margin-top:8px">$0.00</div>
+            <div class="ms">Earn + Grid</div>
           </div>
         </div>
-
-        <!-- AI Decision -->
-        <div class="card ai-box">
-          <div class="ai-label">
-            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color:var(--brand-light)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            Motor de Decisión IA
-          </div>
-          <div class="ai-text" id="ai-decision">Esperando análisis del mercado...</div>
+        <!-- Motor IA -->
+        <div class="card ai-box" style="margin-bottom:12px">
+          <div class="ai-lbl">🧠 Decisión Motor IA</div>
+          <div class="ai-txt" id="ai-decision">Analizando mercado en tiempo real...</div>
         </div>
-
-        <!-- Log terminal -->
+        <!-- Log -->
         <div class="card" style="margin-bottom:12px">
-          <div class="log-header">
-            <span>Log Operaciones</span>
-            <span style="width:7px;height:7px;border-radius:50%;background:var(--brand);display:inline-block;box-shadow:0 0 6px var(--brand)"></span>
-          </div>
+          <div class="card-hdr"><span>📋 Actividad</span><span style="width:7px;height:7px;border-radius:50%;background:#3B82F6;display:inline-block;box-shadow:0 0 6px #3B82F6"></span></div>
           <div class="log-box" id="activity-log"></div>
         </div>
       </div>
 
-      <!-- Section: Chart -->
-      <div class="section" id="sec-chart">
-        <div class="card chart-wrap" id="tv_chart_container"></div>
+      <!-- SECCIÓN 1: Señales -->
+      <div class="sec" id="s1">
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-hdr">
+            <span>📡 Señales Tiempo Real</span>
+            <span id="sig-ts" style="font-size:9px;color:#4B5563"></span>
+          </div>
+          <div id="signals-list">
+            <div style="padding:20px;text-align:center;color:#4B5563;font-size:11px">Cargando señales...</div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- RIGHT COLUMN: Chat -->
-    <div class="section active" id="sec-chat">
-      <div class="card chat-wrap">
-        <div class="chat-header">
-          <h3>Terminal Kishar</h3>
-          <div class="chat-model" id="chat-model-badge">LLM CONECTANDO...</div>
+    <!-- COLUMNA DERECHA: Chat + Señales desktop -->
+    <div>
+      <!-- Señales panel (desktop lo muestra aquí también) -->
+      <div class="card" style="margin-bottom:12px;display:none" id="signals-desktop">
+        <div class="card-hdr"><span>📡 Señales</span><span id="sig-ts2" style="font-size:9px;color:#4B5563"></span></div>
+        <div id="signals-list2">
+          <div style="padding:20px;text-align:center;color:#4B5563;font-size:11px">Cargando...</div>
         </div>
-        <div class="chat-messages" id="chat-messages">
-          <div class="msg-wrap">
-            <span class="msg-sender">KISHAR-BINN</span>
-            <div class="msg-bubble ai">Entorno operativo inicializado. Monitoreando riesgo y capital. Ingresa comandos.</div>
-          </div>
+      </div>
+      <!-- CHAT -->
+      <div class="card chat-wrap sec on" id="s2">
+        <div class="card-hdr">
+          <span>💬 Terminal KISHAR AI</span>
+          <span id="model-lbl" style="font-size:9px;color:#60A5FA;font-family:'Fira Code',monospace">MULTI-LLM</span>
         </div>
-        <div class="chat-input-row">
-          <input id="chat-input" type="text" placeholder="Ej: Analiza SOL..." autocomplete="off">
-          <button class="send-btn" onclick="sendChat(event)">
+        <div class="chat-msgs" id="chat-msgs">
+          <div><div class="mb ai">Entorno operativo inicializado. Soy KISHAR. ¿Qué analizo?</div></div>
+        </div>
+        <div class="chat-inp">
+          <input id="chat-input" type="text" placeholder="Ej: Analiza BTC, ¿debo comprar?" autocomplete="off">
+          <button class="send-btn" onclick="sendChat()">
             <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
           </button>
         </div>
       </div>
     </div>
-
-  </div><!-- end desktop-grid -->
-</div><!-- end wrapper -->
-
-<!-- Bottom Nav (mobile only) -->
-<nav class="bottom-nav">
-  <button class="nav-item active" id="nav-overview" onclick="mobileTab('overview')">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-    Resumen
-  </button>
-  <button class="nav-item" id="nav-chart" onclick="mobileTab('chart')">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
-    Gráfico
-  </button>
-  <button class="nav-item" id="nav-chat" onclick="mobileTab('chat')">
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
-    Terminal
-  </button>
-</nav>
+  </div>
+</div>
 
 <script>
-// ─ TradingView ─
-let tvWidget=null, currentSymbol="BTCUSDT";
+/* ═══════════════════════════════════════════════════════════
+   KISHAR-BINN AI Dashboard — Vanilla JS reactivo
+   Endpoints: /api/state (balance), /api/signals (señales), /chat (IA)
+   Refresco: state cada 5s, signals cada 30s
+═══════════════════════════════════════════════════════════ */
+
+// ── TradingView Widget ──────────────────────────────────────
+let tv=null, curSym='BTCUSDT';
 function initTV(sym){
-  if(tvWidget)tvWidget.remove();
-  tvWidget=new TradingView.widget({autosize:true,symbol:"BINANCE:"+sym,interval:"15",timezone:"Etc/UTC",theme:"dark",style:"1",locale:"es",enable_publishing:false,backgroundColor:"transparent",gridColor:"rgba(255,255,255,0.02)",container_id:"tv_chart_container",toolbar_bg:"transparent",hide_side_toolbar:true});
+  const c=document.getElementById('tv_chart');
+  c.innerHTML='';
+  tv=new TradingView.widget({
+    autosize:true, symbol:'BINANCE:'+sym, interval:'15',
+    timezone:'Etc/UTC', theme:'dark', style:'1', locale:'es',
+    enable_publishing:false, backgroundColor:'rgba(14,14,15,1)',
+    gridColor:'rgba(255,255,255,0.02)', container_id:'tv_chart',
+    toolbar_bg:'rgba(22,22,24,1)', hide_side_toolbar:true,
+    // Indicadores por defecto: RSI + Volumen
+    studies:['RSI@tv-basicstudies','Volume@tv-basicstudies']
+  });
 }
-// Init chart after small delay so container is visible
-setTimeout(()=>initTV(currentSymbol),100);
+setTimeout(()=>initTV(curSym),200);
 
-// ─ Tabs (desktop) ─
-function showTab(t){
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  event.target.classList.add('active');
-  if(t==='overview'){document.getElementById('sec-overview').classList.add('active');document.getElementById('sec-chart').classList.remove('active');}
-  else if(t==='chart'){document.getElementById('sec-chart').classList.add('active');document.getElementById('sec-overview').classList.remove('active');}
+// ── Tabs móvil ─────────────────────────────────────────────
+function st(i){
+  [0,1,2].forEach(j=>{
+    document.getElementById('s'+j)?.classList.remove('on');
+    document.getElementById('n'+j)?.classList.remove('active');
+  });
+  document.getElementById('s'+i)?.classList.add('on');
+  document.getElementById('n'+i)?.classList.add('active');
 }
 
-// ─ Mobile bottom nav ─
-function mobileTab(t){
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  document.getElementById('nav-'+t).classList.add('active');
-  document.querySelectorAll('.section').forEach(s=>s.style.display='none');
-  if(t==='overview'){document.getElementById('sec-overview').style.display='block';}
-  else if(t==='chart'){document.getElementById('sec-chart').style.display='block';if(!tvWidget)initTV(currentSymbol);}
-  else if(t==='chat'){document.getElementById('sec-chat').style.display='block';}
+// ── Desktop: mostrar panel señales en columna derecha ──────
+if(window.innerWidth>=900){
+  document.getElementById('signals-desktop').style.display='block';
 }
+window.addEventListener('resize',()=>{
+  const d=document.getElementById('signals-desktop');
+  if(window.innerWidth>=900) d.style.display='block'; else d.style.display='none';
+});
 
-// ─ State polling ─
-let isFirstLoad=true;
-function fmt(v){const n=parseFloat(v);return isNaN(n)?'$0.00':'$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});}
-function addLog(msg,type='info'){
+// ── Helpers ─────────────────────────────────────────────────
+const fmt=v=>{const n=parseFloat(v);return isNaN(n)?'$0.00':'$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})};
+const fmtPct=v=>{const n=parseFloat(v);return(n>=0?'+':'')+n.toFixed(2)+'%'};
+const colorPct=v=>parseFloat(v)>=0?'#10B981':'#f87171';
+function addLog(msg,type=''){
   const box=document.getElementById('activity-log');
   const t=new Date().toLocaleTimeString('es-ES',{hour12:false});
-  const cls=type==='success'?'log-ok':type==='error'?'log-err':'';
-  box.insertAdjacentHTML('afterbegin',`<div class="log-entry"><span class="log-time">[${t}]</span> <span class="${cls}">${msg}</span></div>`);
+  const cls=type==='ok'?'lok':type==='err'?'ler':'';
+  box.insertAdjacentHTML('afterbegin',`<div class="le"><span class="lt">[${t}]</span> <span class="${cls}">${msg}</span></div>`);
+  // Mantener max 50 entradas en el log
+  while(box.children.length>50) box.removeChild(box.lastChild);
 }
+
+// ── Fetch Balance (/api/state) ───────────────────────────────
+let prevAsset='';
 async function fetchState(){
   try{
     const d=await(await fetch('/api/state')).json();
     if(d.total_balance!==undefined){
-      document.getElementById('total-balance').innerText=fmt(d.total_balance);
-      document.getElementById('free-balance').innerText=fmt(d.usdt_balance);
-      document.getElementById('earn-balance').innerText=fmt(d.earn_balance);
-      document.getElementById('grid-balance').innerText=fmt(d.grid_balance);
-      document.getElementById('tier-badge').innerText=d.tier||'—';
-      const dec=document.getElementById('ai-decision');
-      const nd=d.last_ai_decision||'Analizando...';
-      if(dec.innerText!==nd){dec.innerText=nd;addLog('Motor IA actualizó directrices','success');}
-      const asset=d.current_asset?.match(/^[A-Z0-9]{5,10}/)?.[0]||'BTCUSDT';
-      if(asset!==currentSymbol){currentSymbol=asset;if(tvWidget)initTV(currentSymbol);addLog('Par actualizado: '+currentSymbol);}
-      if(isFirstLoad){addLog('Sincronización completada','success');isFirstLoad=false;}
+      document.getElementById('total-balance').textContent=fmt(d.total_balance);
+      document.getElementById('free-balance').textContent=fmt(d.usdt_balance);
+      document.getElementById('earn-balance').textContent=fmt((d.earn_balance||0)+(d.grid_balance||0));
+      document.getElementById('tier-badge').textContent=d.tier||'—';
+      const dec=d.last_ai_decision||'Monitoreando...';
+      document.getElementById('ai-decision').textContent=dec;
+      // Actualizar símbolo activo y gráfico si cambia
+      const asset=(d.current_asset||'BTCUSDT').replace(/[^A-Z0-9]/g,'').slice(0,10)||'BTCUSDT';
+      document.getElementById('active-sym').textContent=asset;
+      if(asset!==prevAsset){
+        prevAsset=asset; curSym=asset; initTV(asset);
+        addLog('Par activo: '+asset,'ok');
+      }
     }
   }catch(e){
-    document.getElementById('sync-status').innerText='Offline';
-    document.getElementById('sync-status').style.color='#f87171';
+    document.getElementById('live-lbl').textContent='Offline';
+    document.getElementById('live-lbl').style.color='#f87171';
+    addLog('Error sincronizando estado','err');
   }
 }
-setInterval(fetchState,3000);fetchState();
+setInterval(fetchState,5000); fetchState();
 
-// ─ Chat ─
-async function sendChat(e){
-  if(e)e.preventDefault();
+// ── Fetch Señales (/api/signals) ─────────────────────────────
+function buildSigColor(sig){
+  return sig==='COMPRA'?'buy':sig==='VENTA'?'sell':'neut';
+}
+function confColor(c){
+  return c>=70?'linear-gradient(90deg,#059669,#10B981)':c>=50?'linear-gradient(90deg,#D97706,#F59E0B)':'#4B5563';
+}
+function renderSignals(signals, containerId){
+  const box=document.getElementById(containerId);
+  if(!signals||signals.length===0){
+    box.innerHTML='<div style="padding:20px;text-align:center;color:#4B5563;font-size:11px">Sin señales disponibles</div>';
+    return;
+  }
+  // Construir HTML para cada señal
+  box.innerHTML=signals.map(s=>`
+    <div class="sig-item" onclick="switchSym('${s.symbol}')">
+      <div class="sig-top">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="badge ${buildSigColor(s.signal)}">${s.signal}</span>
+          <span class="sig-sym">${s.symbol.replace('USDT','')}<span style="color:#374151">/USDT</span></span>
+        </div>
+        <span class="sig-price">${s.price?.toLocaleString('en-US',{maximumFractionDigits:4})}</span>
+      </div>
+      <!-- Barra de confianza: indica qué tan fuerte es la señal -->
+      <div class="bar-row">
+        <div class="bar-lbl"><span>Confianza</span><b style="color:${s.confidence>=70?'#10B981':s.confidence>=50?'#F59E0B':'#9CA3AF'}">${s.confidence?.toFixed(1)}%</b></div>
+        <div class="bar-tr"><div class="bar-fi" style="width:${s.confidence}%;background:${confColor(s.confidence)}"></div></div>
+      </div>
+      <!-- Estadísticas técnicas secundarias -->
+      <div class="sig-stats">
+        <span>RSI <b style="color:${s.rsi<32?'#10B981':s.rsi>68?'#f87171':'#9CA3AF'}">${s.rsi}</b></span>
+        <span>Cambio <b style="color:${colorPct(s.change_pct)}">${fmtPct(s.change_pct)}</b></span>
+        <span>Vol <b style="color:${s.volume_ratio>1.5?'#60A5FA':'#6B7280'}">${s.volume_ratio}x</b></span>
+        <span>Trend <b style="color:${colorPct(s.trend_pct)}">${fmtPct(s.trend_pct)}</b></span>
+      </div>
+    </div>`).join('');
+}
+
+// Clic en señal cambia el gráfico al par seleccionado
+function switchSym(sym){
+  curSym=sym; initTV(sym);
+  document.getElementById('active-sym').textContent=sym;
+  addLog('Gráfico cambiado a '+sym,'ok');
+}
+
+async function fetchSignals(){
+  try{
+    const d=await(await fetch('/api/signals')).json();
+    if(d.signals){
+      renderSignals(d.signals,'signals-list');
+      renderSignals(d.signals,'signals-list2');
+      const ts=new Date(d.updated_at*1000).toLocaleTimeString('es-ES',{hour12:false});
+      document.getElementById('sig-ts').textContent=ts;
+      document.getElementById('sig-ts2').textContent=ts;
+      // Log de la mejor señal encontrada
+      const top=d.signals[0];
+      if(top) addLog(`Mejor oportunidad: ${top.symbol} ${top.signal} (${top.confidence}%)`, top.signal==='COMPRA'?'ok':'');
+    }
+  }catch(e){addLog('Error cargando señales','err');}
+}
+setInterval(fetchSignals,30000); fetchSignals();
+
+// ── Chat con IA ──────────────────────────────────────────────
+async function sendChat(){
   const inp=document.getElementById('chat-input');
-  const box=document.getElementById('chat-messages');
-  const p=inp.value.trim();if(!p)return;
-  inp.value='';
-  box.innerHTML+=`<div class="msg-wrap user"><span class="msg-sender">TÚ</span><div class="msg-bubble user-b">${p}</div></div>`;
+  const box=document.getElementById('chat-msgs');
+  const p=inp.value.trim(); if(!p)return; inp.value='';
+  // Mostrar mensaje del usuario
+  box.insertAdjacentHTML('beforeend',`<div style="display:flex;justify-content:flex-end"><div class="mb usr">${p}</div></div>`);
+  // Indicador de carga animado
   const lid='l'+Date.now();
-  box.innerHTML+=`<div id="${lid}" class="msg-wrap"><div class="msg-bubble ai" style="display:flex;gap:4px;align-items:center"><div class="bounce-dot"></div><div class="bounce-dot"></div><div class="bounce-dot"></div></div></div>`;
+  box.insertAdjacentHTML('beforeend',`<div id="${lid}"><div class="mb ai" style="display:flex;gap:4px">
+    <span style="animation:blink 1s infinite;display:inline-block">●</span>
+    <span style="animation:blink 1s .3s infinite;display:inline-block">●</span>
+    <span style="animation:blink 1s .6s infinite;display:inline-block">●</span>
+  </div></div>`);
   box.scrollTop=box.scrollHeight;
   try{
     const r=await(await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:p})})).json();
     document.getElementById(lid)?.remove();
-    const reply=r.reply.replace(/\\n/g,'<br>').replace(/\\*\\*(.*?)\\*\\*/g,'<strong style="color:#fff">$1</strong>');
-    box.innerHTML+=`<div class="msg-wrap"><span class="msg-sender">KISHAR-BINN</span><div class="msg-bubble ai">${reply}</div></div>`;
-    if(r.model)document.getElementById('chat-model-badge').innerText=r.model;
+    const reply=(r.reply||'Sin respuesta').replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong style="color:#fff">$1</strong>');
+    box.insertAdjacentHTML('beforeend',`<div><div class="mb ai">${reply}</div></div>`);
+    if(r.model)document.getElementById('model-lbl').textContent=r.model;
+    addLog('IA respondió via '+r.model,'ok');
   }catch(err){
     document.getElementById(lid)?.remove();
-    box.innerHTML+=`<div class="msg-wrap"><div class="msg-bubble error">Error de conexión con el orquestador.</div></div>`;
+    box.insertAdjacentHTML('beforeend',`<div><div class="mb err">Error de conexión con el orquestador IA.</div></div>`);
+    addLog('Error en chat IA','err');
   }
   box.scrollTop=box.scrollHeight;
 }
-document.getElementById('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat(e);});
+document.getElementById('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()});
 </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html_content)
 
-class ChatRequest(BaseModel):
-    prompt: str
-
-@app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    prompt = request.prompt
-    
-    state = {}
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            state = json.load(f)
-            
-    context = f"Eres KISHAR-BINN_AI, el orquestador cuantitativo institucional. Estado actual: {json.dumps(state)}. Responde de forma técnica, analítica pero motivadora en un máximo de 2 párrafos cortos."
-    
-    try:
-        response, active_provider = orchestrator.ask_ai(prompt, system_context=context)
-        usage = orchestrator.get_usage_report().get(active_provider, {})
-        model_label = f"{active_provider.upper()} [{usage.get('used',0)}/{usage.get('limit','?')} calls]"
-        return {"reply": response, "model": model_label}
-    except Exception as e:
-        return {"reply": f"Error del sistema IA: {str(e)}", "model": "ERROR"}
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv('PORT', 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
