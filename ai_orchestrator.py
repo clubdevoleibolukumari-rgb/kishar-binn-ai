@@ -11,31 +11,37 @@ from typing import Dict, Optional
 # ═══════════════════════════════════════════════════════════════
 PROVIDER_CONFIG = {
     "groq": {
-        "max_tokens": 256,        # Respuestas cortas para trading
-        "daily_limit": 80,        # Max llamadas por día (tier gratuito ~14k/día pero siendo conservadores)
-        "cooldown_sec": 5,        # Segundos mínimos entre llamadas
-        "model": "llama-3.1-8b-instant"  # Modelo rápido y eficiente (no el 70B)
+        "max_tokens": 512,        # Ampliado para análisis más ricos
+        "daily_limit": 120,       # Groq tiene límite alto (~14k tokens/día), siendo conservadores
+        "cooldown_sec": 3,
+        "model": "llama-3.1-8b-instant"
     },
     "gemini": {
+        "max_tokens": 512,
+        "daily_limit": 15,        # gemini-2.5-flash: cuota gratuita limitada, usar con cuidado
+        "cooldown_sec": 20,       # Cooldown alto para no saturar cuota
+        "model": "gemini-2.5-flash"  # VERIFICADO: modelo disponible y funcional
+    },
+    "gemini_lite": {
         "max_tokens": 256,
-        "daily_limit": 50,        # Gemini Flash: 1500/día gratuitos, límite conservador
-        "cooldown_sec": 10,
-        "model": "gemini-1.5-flash"
+        "daily_limit": 30,        # gemini-2.5-flash-lite: cuota más amplia
+        "cooldown_sec": 12,
+        "model": "gemini-2.5-flash-lite"
     },
     "deepseek": {
         "max_tokens": 256,
-        "daily_limit": 30,
+        "daily_limit": 0,         # DESACTIVADO: saldo insuficiente en cuenta
         "cooldown_sec": 10,
         "model": "deepseek-chat"
     },
     "huggingface": {
-        "max_tokens": 200,
-        "daily_limit": 20,
-        "cooldown_sec": 15,
+        "max_tokens": 256,
+        "daily_limit": 40,
+        "cooldown_sec": 12,
         "model": "mistralai/Mistral-7B-Instruct-v0.3"
     },
     "ollama": {
-        "max_tokens": 256,
+        "max_tokens": 512,
         "daily_limit": 999,       # Local, sin límites externos
         "cooldown_sec": 2,
         "model": "llama3.2"
@@ -64,14 +70,16 @@ class AIOrchestrator:
     def __init__(self, api_keys: Dict[str, str]):
         self.api_keys = api_keys
         self.logger = logging.getLogger("AI_Orchestrator")
-        self.fallback_order = ['groq', 'gemini', 'deepseek', 'huggingface', 'ollama']
+        # Orden de fallback: Groq (más rápido/generoso) → Gemini Lite → Gemini → HuggingFace → Ollama local
+        # DeepSeek eliminado del ciclo activo por saldo insuficiente
+        self.fallback_order = ['groq', 'gemini_lite', 'gemini', 'huggingface', 'ollama']
         self.current_index = 0
         self.ollama_base_url = "http://localhost:11434"
         
         # Estado de uso: contadores diarios y timestamps de último uso
         self._usage: Dict[str, Dict] = {
             p: {"count": 0, "last_call": 0.0, "date": str(date.today())}
-            for p in self.fallback_order
+            for p in ['groq', 'gemini', 'gemini_lite', 'deepseek', 'huggingface', 'ollama']
         }
         
         # Cache simple: hash_del_prompt -> (respuesta, timestamp)
@@ -163,6 +171,24 @@ class AIOrchestrator:
         key = self.api_keys.get('gemini')
         if not key: raise ValueError("No Gemini key")
         cfg = PROVIDER_CONFIG["gemini"]
+        
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{cfg['model']}:generateContent?key={key}"
+        response = requests.post(
+            url,
+            json={
+                "contents": [{"parts": [{"text": f"{SYSTEM_TRADING_PROMPT}\n\n{prompt}"}]}],
+                "generationConfig": {"maxOutputTokens": cfg["max_tokens"], "temperature": 0.3}
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json()['candidates'][0]['content']['parts'][0]['text']
+
+    def _query_gemini_lite(self, prompt: str) -> str:
+        """Consulta a gemini-2.5-flash-lite (más rápido, cuota más amplia)"""
+        key = self.api_keys.get('gemini')
+        if not key: raise ValueError("No Gemini key")
+        cfg = PROVIDER_CONFIG["gemini_lite"]
         
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{cfg['model']}:generateContent?key={key}"
         response = requests.post(
@@ -270,10 +296,17 @@ class AIOrchestrator:
                 query_fn = {
                     'groq': self._query_groq,
                     'gemini': self._query_gemini,
+                    'gemini_lite': self._query_gemini_lite,
                     'deepseek': self._query_deepseek,
                     'huggingface': self._query_huggingface,
                     'ollama': self._query_ollama
                 }.get(provider)
+                
+                if query_fn is None:
+                    self.logger.warning(f"[{provider}] Proveedor desconocido. Saltando.")
+                    self.current_index = (self.current_index + 1) % len(self.fallback_order)
+                    attempts += 1
+                    continue
                 
                 result = query_fn(full_prompt)
                 self._register_call(provider)
@@ -281,7 +314,7 @@ class AIOrchestrator:
                 
                 self.logger.info(
                     f"[{provider}] Éxito. Uso hoy: {self._usage[provider]['count']}"
-                    f"/{PROVIDER_CONFIG[provider]['daily_limit']}"
+                    f"/{PROVIDER_CONFIG.get(provider, {}).get('daily_limit', '?')}"
                 )
                 return result, provider
                 
@@ -291,7 +324,9 @@ class AIOrchestrator:
                 attempts += 1
                 time.sleep(1)
         
-        raise RuntimeError("Todos los proveedores de IA fallaron o alcanzaron sus límites.")
+        # En lugar de lanzar excepción, retornar respuesta de contingencia para no bloquear el sistema
+        self.logger.error("Todos los proveedores de IA fallaron. Activando respuesta de contingencia local.")
+        return "[CONTINGENCIA LOCAL] Mercado en análisis. Sin señales claras. Mantener posición actual.", "fallback_local"
 
     def get_usage_report(self) -> Dict:
         """Retorna el uso actual de cada proveedor para mostrar en el dashboard."""

@@ -351,10 +351,20 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
 </aside>
 
 <header class="topbar">
-    <div class="top-left">
+    <div class="top-left" style="display: flex; align-items: center; gap: 15px;">
         <div class="master-switch" onclick="toggleMaster()">
             <div class="switch-dot" id="master-dot"></div>
             <span id="master-txt" style="font-size:12px; font-weight:700; color:var(--mu)">SYSTEM OFFLINE</span>
+        </div>
+        
+        <!-- Trading Mode Selector Dropdown -->
+        <div class="mode-selector" style="display: flex; align-items: center; gap: 8px; background: var(--s2); border: 1px solid var(--brd); border-radius: 999px; padding: 4px 14px;">
+            <span style="font-size: 11px; font-weight: 700; color: var(--mu); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 4px;"><i data-lucide="sliders" style="width:12px; height:12px; color:var(--acc);"></i> Modo Trading:</span>
+            <select id="trading-mode-select" onchange="updateTradingMode(this.value)" style="background: transparent; border: none; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; outline: none; padding-right: 5px;">
+                <option value="AUTO_IA" style="background: var(--s1); color: var(--gr);">🤖 AUTOMÁTICO (IA)</option>
+                <option value="TELEGRAM_ONLY" style="background: var(--s1); color: var(--purp);">📩 SOLO SEÑALES (TELEGRAM)</option>
+                <option value="MANUAL" style="background: var(--s1); color: var(--acc);">👀 MANUAL / ALERTAS</option>
+            </select>
         </div>
     </div>
     <div class="top-right">
@@ -1452,14 +1462,64 @@ async function fetchMarketContext() {
     }
 }
 
+async function fetchTradingMode() {
+    try {
+        const res = await fetch('/api/config');
+        const data = await res.json();
+        const select = document.getElementById('trading-mode-select');
+        if (select && data.operation_mode) {
+            select.value = data.operation_mode;
+            updateSelectColor(select, data.operation_mode);
+        }
+    } catch(e) {
+        console.error("Error fetching trading mode", e);
+    }
+}
+
+async function updateTradingMode(mode) {
+    try {
+        const res = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operation_mode: mode })
+        });
+        const data = await res.json();
+        
+        let label = '';
+        let color = 'purple';
+        if (mode === 'AUTO_IA') { label = '🤖 AUTOMÁTICO (IA)'; color = 'success'; }
+        else if (mode === 'TELEGRAM_ONLY') { label = '📩 SOLO SEÑALES (TELEGRAM)'; color = 'purple'; }
+        else { label = '👀 MANUAL / ALERTAS'; color = 'warning'; }
+
+        showNotification(
+            `⚡ MODO DE TRADING ACTUALIZADO`,
+            `El sistema ha cambiado al modo de operación: ${label}`,
+            color
+        );
+        
+        const select = document.getElementById('trading-mode-select');
+        if (select) updateSelectColor(select, mode);
+    } catch(e) {
+        showNotification(`⚠️ ERROR DE CONFIGURACIÓN`, `No se pudo cambiar el modo de trading.`, 'danger');
+    }
+}
+
+function updateSelectColor(select, mode) {
+    if (mode === 'AUTO_IA') select.style.color = 'var(--gr)';
+    else if (mode === 'TELEGRAM_ONLY') select.style.color = 'var(--purp)';
+    else select.style.color = 'var(--acc)';
+}
+
 addLog("Panel Institucional SPA Iniciado.", "sys");
 
 // Primer render inmediato
+fetchTradingMode();
 fetchMarketContext();
 fetchTelemetry();
 fetchPositions();
 
 setInterval(async () => {
+    fetchTradingMode();
     fetchTelemetry();
     fetchPositions();
     fetchMarketContext();

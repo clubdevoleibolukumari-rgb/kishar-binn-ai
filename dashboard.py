@@ -91,14 +91,37 @@ def fetch_binance_state() -> dict:
         sig = hmac.new(secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': api_key}
         
-        assets = {}
-        r = req.get(f"{base}/api/v3/account?{qs}&signature={sig}", headers=headers, timeout=8)
-        data = r.json()
-        if isinstance(data, dict) and 'balances' in data:
-            for b in data['balances']:
-                qty = float(b['free']) + float(b['locked'])
-                if qty > 0: assets[b['asset']] = qty
+        # 1. Spot (suele estar vacío con BINANCE_TESTNET=False en cuenta real)
+        spot_assets = {}
+        try:
+            r = req.get(f"{base}/api/v3/account?{qs}&signature={sig}", headers=headers, timeout=8)
+            data = r.json()
+            if isinstance(data, dict) and 'balances' in data:
+                for b in data['balances']:
+                    qty = float(b['free']) + float(b['locked'])
+                    if qty > 0:
+                        spot_assets[b['asset']] = qty
+        except Exception: pass
         
+        # 2. Funding Wallet (aquí es donde está el USDT principal)
+        funding_assets = {}
+        funding_usdt = 0.0
+        try:
+            ts2 = int(time.time() * 1000)
+            qs2 = f"timestamp={ts2}&recvWindow=5000"
+            sig2 = hmac.new(secret.encode(), qs2.encode(), hashlib.sha256).hexdigest()
+            rf = req.post(f"{base}/sapi/v1/asset/get-funding-asset?{qs2}&signature={sig2}", headers=headers, timeout=8)
+            fd = rf.json()
+            if isinstance(fd, list):
+                for f in fd:
+                    qty = float(f.get('free', 0)) + float(f.get('locked', 0))
+                    if qty > 0:
+                        funding_assets[f['asset']] = qty
+                        if f['asset'] == 'USDT':
+                            funding_usdt = qty
+        except Exception: pass
+        
+        # 3. Futuros USDT-M
         futures_balance = 0.0
         try:
             fbase = 'https://fapi.binance.com'
@@ -110,22 +133,37 @@ def fetch_binance_state() -> dict:
             if isinstance(fdata, dict) and 'totalWalletBalance' in fdata:
                 futures_balance = float(fdata['totalWalletBalance'])
         except Exception: pass
-
-        total_balance = futures_balance
-        usdt_only = assets.get('USDT', 0.0)
-        margin_balance = 0.0
+        
+        # 4. Convertir altcoins del Funding a USDT
+        altcoin_value = 0.0
+        for asset, qty in funding_assets.items():
+            if asset in ['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD']:
+                continue  # Ya contabilizado
+            try:
+                pr = req.get(f"{base}/api/v3/ticker/price?symbol={asset}USDT", timeout=4)
+                price = float(pr.json()['price'])
+                altcoin_value += qty * price
+            except Exception:
+                pass
+        
+        # 5. Spot USDT
+        spot_usdt = spot_assets.get('USDT', 0.0)
+        spot_fdusd = spot_assets.get('FDUSD', 0.0)
+        
+        # Total real consolidado
+        total_balance = spot_usdt + spot_fdusd + funding_usdt + altcoin_value + futures_balance
 
         return {
-            "total_balance": round(total_balance + margin_balance, 4),
-            "usdt_balance": round(usdt_only, 4),
-            "fund_balance": round(assets.get('USDT', 0), 2),
+            "total_balance": round(total_balance, 4),
+            "usdt_balance": round(spot_usdt + funding_usdt, 4),
+            "fund_balance": round(funding_usdt, 2),
             "futures_balance": round(futures_balance, 2),
-            "earn_balance": round(assets.get('FDUSD', 0), 2),
-            "margin_balance": round(margin_balance, 2),
-            "tier": "ELITE",
+            "earn_balance": round(spot_fdusd, 2),
+            "margin_balance": round(altcoin_value, 4),
+            "tier": "ACTIVE_TRADING" if total_balance >= 15 else ("LOW_CAPITAL" if total_balance >= 5 else "FREE_CAPITAL"),
             "last_ai_decision": "Monitoreo multi-agente activo.",
             "current_asset": "BTCUSDT",
-            "source": "binance_api",
+            "source": "binance_api_consolidado",
             "current_status": "SISTEMA ONLINE"
         }
     except Exception as e:
