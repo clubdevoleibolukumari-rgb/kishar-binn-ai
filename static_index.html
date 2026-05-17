@@ -1312,11 +1312,27 @@ async function fetchTelemetry() {
 
             // Trackear cambios de estado de la IA
             if (lastTelemetry.status && (lastTelemetry.status !== data.current_status || lastTelemetry.asset !== data.current_asset)) {
-                showNotification(
-                    `🧠 ALBERT-ORQUESTADOR ACTIVO`,
-                    `Optimizando Q-Learning. Escaneo activo: ${data.current_asset}. Mensaje: ${data.current_status}`,
-                    'purple'
-                );
+                let msg = '';
+                let title = '🧠 ALBERT-ORQUESTADOR';
+                let nType = 'purple';
+                
+                if (data.current_status.includes('Evaluando')) {
+                    title = `🔍 ESCANEO DE MERCADO: ${data.current_asset}`;
+                    msg = `Analizando patrones de velas y volumen en tiempo real para detectar entradas Sniper.`;
+                    nType = 'warning';
+                } else if (data.current_status.includes('Operando')) {
+                    title = `🚀 ORDEN AUTOMÁTICA ENVIADA`;
+                    msg = `Albert ha detectado un score superior a 70 y está ejecutando entrada Sniper en ${data.current_asset}.`;
+                    nType = 'success';
+                } else if (data.current_status.includes('Preservando')) {
+                    title = `🛡️ PROTECCIÓN DE CAPITAL ACTIVA`;
+                    msg = `Balance seguro. Los agentes están monitoreando el mercado pasivamente para evitar riesgos.`;
+                    nType = 'purple';
+                } else {
+                    msg = `${data.current_status}. Escaneo activo en ${data.current_asset}.`;
+                }
+                
+                showNotification(title, msg, nType);
             }
             lastTelemetry.status = data.current_status;
             lastTelemetry.asset = data.current_asset;

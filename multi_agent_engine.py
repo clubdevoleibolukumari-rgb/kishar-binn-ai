@@ -46,10 +46,6 @@ class MultiAgentEngine:
         Pipeline Asincrónico Multi-Agente.
         Simula el flujo institucional: Debate de Analistas -> Veto de Riesgo -> Decisión PM.
         """
-        if not self.is_active:
-            logger.warning("[AI-INIT] Motor principal inactivo o no cargado. Activando motor de contingencia redundante de Albert-Orquestador...")
-            raise Exception("Framework primario de LangGraph inactivo")
-
         # Limpieza de símbolo para yfinance (usado internamente por TradingAgents)
         ticker = symbol.replace('USDT', '')
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -74,6 +70,10 @@ class MultiAgentEngine:
         low_cost_target = "MEMECOIN DE BAJO COSTE" if is_memecoin else ("MICRO-LOTE SEGURO" if symbol == "SOLUSDT" else "ACTIVO PREMIUM CAPITAL")
 
         try:
+            if not self.is_active:
+                logger.warning("[AI-INIT] Motor principal inactivo o no cargado. Activando motor de contingencia redundante de Albert-Orquestador...")
+                raise Exception("Framework primario de LangGraph inactivo")
+
             logger.info(f"[PIPELINE] Iniciando debate multi-agente para {ticker} en {timeframe}...")
             
             # Ejecución del Grafo (LangGraph)

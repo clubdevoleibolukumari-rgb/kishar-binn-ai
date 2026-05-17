@@ -1038,6 +1038,8 @@ ESTRATEGIAS ACTIVAS
                             sym = cmd_data.get("symbol")
                             mode = cmd_data.get("mode")
                             logger.info(f"[TRADE] Ejecutando orden en {sym} [{mode}]")
+                            state = self.tier_manager.get_state()
+                            self.smart_exec.execute_trade(sym, mode, 85, state.total_balance)
                     except Exception as e:
                         logger.error(f"Error procesando comando: {e}")
 
