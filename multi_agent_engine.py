@@ -47,7 +47,8 @@ class MultiAgentEngine:
         Simula el flujo institucional: Debate de Analistas -> Veto de Riesgo -> Decisión PM.
         """
         if not self.is_active:
-            return {"error": "Motor IA offline", "decision": "WAIT"}
+            logger.warning("[AI-INIT] Motor principal inactivo o no cargado. Activando motor de contingencia redundante de Albert-Orquestador...")
+            raise Exception("Framework primario de LangGraph inactivo")
 
         # Limpieza de símbolo para yfinance (usado internamente por TradingAgents)
         ticker = symbol.replace('USDT', '')

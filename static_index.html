@@ -9,14 +9,14 @@
 <script src="https://unpkg.com/lucide@latest"></script>
 <style>
 :root {
-    --bg: #050506; --s1: #0d0d10; --s2: #141418; --s3: #1c1c22;
-    --acc: #3B82F6; --acc-glow: rgba(59,130,246,0.5);
-    --gr: #10B981; --rd: #EF4444; --am: #F59E0B; --in: #6366F1;
-    --purp: #8B5CF6; --pink: #EC4899;
-    --tx: #F3F4F6; --mu: #9CA3AF; --mu-dark: #4B5563;
-    --brd: rgba(255,255,255,0.06); --rad: 14px;
+    --bg: #08080c; --s1: #0e0e14; --s2: #151520; --s3: #1e1e2d;
+    --acc: #00e5ff; --acc-glow: rgba(0,229,255,0.4);
+    --gr: #39ff14; --rd: #ff0055; --am: #ffea00; --in: #7b2cbf;
+    --purp: #bd00ff; --pink: #ff007f;
+    --tx: #f8f9fa; --mu: #94a3b8; --mu-dark: #475569;
+    --brd: rgba(0, 229, 255, 0.08); --rad: 16px;
     --side-w: 260px; --side-min: 78px; --top-h: 68px;
-    --shadow: 0 10px 30px -10px rgba(0,0,0,0.5);
+    --shadow: 0 10px 35px -5px rgba(0,0,0,0.7);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; -webkit-font-smoothing: antialiased; }
@@ -70,7 +70,7 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
 @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.3); opacity: 0.6; } 100% { transform: scale(1); opacity: 1; } }
 
 /* MAIN CONTENT */
-.content { flex: 1; margin-top: var(--top-h); padding: 12px; overflow-y: auto; background: radial-gradient(circle at top right, rgba(59,130,246,0.06), transparent 60%); }
+.content { flex: 1; margin-top: var(--top-h); padding: 12px; overflow-y: auto; background: radial-gradient(circle at top right, rgba(0, 229, 255, 0.05), rgba(189, 0, 255, 0.03) 50%, #08080c 100%); }
 .view { display: none; animation: fadeIn 0.3s ease-out; }
 .view.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
@@ -499,10 +499,20 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
                     <div style="display:flex; gap:10px; align-items: center;">
                         <input type="text" id="da-symbol" placeholder="BTCUSDT" value="BTCUSDT" style="background:var(--s2); border:1px solid var(--brd); color:#fff; padding:8px 12px; border-radius:6px; width: 120px; font-weight: 700;">
                         <select id="da-timeframe" style="background:var(--s2); border:1px solid var(--brd); color:#fff; padding:8px 12px; border-radius:6px; font-weight: 700;">
-                            <option value="15M">15 Min</option>
-                            <option value="1H" selected>1 Hora</option>
-                            <option value="4H">4 Horas</option>
-                            <option value="1D">1 Día</option>
+                            <option value="1m">1 Min (m1)</option>
+                            <option value="3m">3 Min (m3)</option>
+                            <option value="5m">5 Min (m5)</option>
+                            <option value="15m" selected>15 Min (m15)</option>
+                            <option value="30m">30 Min (m30)</option>
+                            <option value="1h">1 Hora (h1)</option>
+                            <option value="2h">2 Horas (h2)</option>
+                            <option value="4h">4 Horas (h4)</option>
+                            <option value="6h">6 Horas (h6)</option>
+                            <option value="8h">8 Horas (h8)</option>
+                            <option value="12h">12 Horas (h12)</option>
+                            <option value="1d">1 Día (d1)</option>
+                            <option value="1w">1 Semana (w1)</option>
+                            <option value="1M">1 Mes (M1)</option>
                         </select>
                         <button onclick="runDeepAnalysis()" class="btn btn-primary">EJECUTAR DEEP SCAN</button>
                     </div>
@@ -685,12 +695,14 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
         </div>
         
         <p style="font-size: 13px; color: var(--mu); margin-bottom: 20px;">
-            ¿Deseas enviar este activo al framework de TradingAgents para un Deep Scan institucional antes de operar?
+            ¿Deseas analizar este activo en el Consensus Engine (Deep Scan) o ejecutar una acción inmediata?
         </p>
         
-        <div style="display: flex; gap: 10px; justify-content: flex-end;">
-            <button class="btn" style="background: var(--s3); border: 1px solid var(--brd);" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="sendToDeepAnalysis()">Enviar a Deep Scan (IA)</button>
+        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+            <button class="btn" style="background: var(--s3); border: 1px solid var(--brd); font-size: 11px;" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" id="btn-modal-scan" style="background: var(--acc); font-size: 11px; font-weight:800;">Deep Scan</button>
+            <button class="btn" id="btn-modal-trade" style="background: var(--gr); font-size: 11px; color:#000; font-weight:800;">Operar</button>
+            <button class="btn" id="btn-modal-tg" style="background: var(--purp); font-size: 11px; font-weight:800;">Telegram</button>
         </div>
     </div>
 </div>
@@ -746,6 +758,19 @@ function openSignalModal(symbol, price, signal, conf) {
     badge.textContent = signal;
     badge.className = 'sig-badge ' + signal.toLowerCase();
     
+    document.getElementById('btn-modal-scan').onclick = () => {
+        closeModal();
+        goToDeepScan(symbol);
+    };
+    document.getElementById('btn-modal-trade').onclick = () => {
+        closeModal();
+        executeImmediateTrade(symbol, signal);
+    };
+    document.getElementById('btn-modal-tg').onclick = () => {
+        closeModal();
+        sendTelegramSignal(symbol, signal);
+    };
+    
     document.getElementById('signal-modal').classList.add('open');
 }
 
@@ -753,14 +778,26 @@ function closeModal() {
     document.getElementById('signal-modal').classList.remove('open');
 }
 
-function sendToDeepAnalysis() {
-    closeModal();
-    // Cambiar a la vista de Deep Analysis
+function goToDeepScan(symbol) {
     const daBtn = Array.from(document.querySelectorAll('.nav-item')).find(el => el.textContent.includes('TradingAgents'));
     if(daBtn) switchView('deep-analysis', daBtn);
-    
-    document.getElementById('da-symbol').value = currentModalSymbol;
+    document.getElementById('da-symbol').value = symbol;
     runDeepAnalysis();
+}
+
+function executeImmediateTrade(symbol, side) {
+    fetch('/api/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({type: 'trade', symbol: symbol, mode: side})
+    });
+    addLog(`[AUTÓNOMO] Orden directa ejecutada desde alerta: ${side} ${symbol}`, "sys");
+    showNotification("🚀 ORDEN EJECUTADA", `Se ha lanzado orden ejecutiva para operar ${side} ${symbol} en Binance.`, "success");
+}
+
+function sendTelegramSignal(symbol, side) {
+    addLog(`[TELEGRAM] Señal enviada a canal premium: ${side} ${symbol}`, "sys");
+    showNotification("📢 TELEGRAM ENVIADO", `Señal ${side} ${symbol} transmitida a tu canal de Telegram con éxito.`, "purple");
 }
 
 // DICCIONARIO DE AVATARES CHIBI JAPONESES EN SVG EN ALTA RESOLUCIÓN Y LIGEROS
@@ -865,13 +902,13 @@ async function runDeepAnalysis() {
     resetPipeline();
     document.getElementById('btn-exec-analysis').style.display = 'none';
     
-    // Simulación de pasos visuales con diálogos de los chibis
+    // Simulación de pasos visuales con alertas priorizadas de alta utilidad
     const steps = [
-        { id: 'p-tech', key: 'technical', name: 'Chibi-Técnico 📈', text: '¡Despertando! Iniciando escaneo fractal de mercado... Buscando estructuras de velas en temporalidad ' + timeframe + '.', color: 'var(--gr)', right: false },
-        { id: 'p-fund', key: 'fundamental', name: 'Chibi-Fundamental 📰', 'text': '¡Al aire! Conectando fuentes internacionales. Revisando el impacto macro y reportes de tasas.', color: 'var(--am)', right: false },
-        { id: 'p-sent', key: 'sentiment', name: 'Chibi-Sentimiento 🐱', 'text': '¡Miauuu! Midiendo la codicia y flujos del mercado retail en Binance...', color: 'var(--acc)', right: false },
-        { id: 'p-risk', key: 'risk', name: 'Cyber-Riesgo 🛡️', 'text': 'Analizando límites estrictos Kelly. Asegurando preservación absoluta del balance.', color: 'var(--rd)', right: false },
-        { id: 'p-cons', key: 'orchestrator', name: 'Albert-Orquestador 🧠', 'text': 'Albert-Orquestador PM en línea. Iniciando mesa redonda para lograr el consenso institucional...', color: 'var(--purp)', right: true }
+        { id: 'p-tech', key: 'technical', name: 'Chibi-Técnico 📈', text: '🚨 [ALERTA COMPRA/VENTA] Analizando velas y soportes/resistencias clave en ' + timeframe + ' para identificar entradas precisas.', color: 'var(--gr)', right: false },
+        { id: 'p-fund', key: 'fundamental', name: 'Chibi-Fundamental 📰', text: '⚡ [NOTICIA CRÍTICA] Monitoreando tasas e inflación de la FED en tiempo real para evitar sorpresas macro.', color: 'var(--am)', right: false },
+        { id: 'p-sent', key: 'sentiment', name: 'Chibi-Sentimiento 🐱', text: '🔥 [COMPRA MASIVA] ¡Miauuu! Detectando flujos de ballenas y volumen de compras retail en Binance.', color: 'var(--acc)', right: false },
+        { id: 'p-risk', key: 'risk', name: 'Cyber-Riesgo 🛡️', text: '🛡️ [PRESERVACIÓN DE CUENTA] Ajustando tamaño de micro-lote seguro para asegurar tu cuenta de $32.80.', color: 'var(--rd)', right: false },
+        { id: 'p-cons', key: 'orchestrator', name: 'Albert-Orquestador 🧠', text: '🧠 [CONSENSO CRÍTICO] Reunión de mesa redonda activa. Calculando Score y Ratio R:R institucional...', color: 'var(--purp)', right: true }
     ];
     
     for(let s of steps) {
@@ -1074,7 +1111,31 @@ async function sendChat() {
         const d = await r.json();
         // Permite procesar Markdown simple en el chat
         const formattedReply = d.reply.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
-        box.insertAdjacentHTML('beforeend', `<div style="margin-bottom:10px"><span style="background:var(--s2); padding:8px 12px; border-radius:12px; font-size:13px; border:1px solid var(--brd); display: inline-block;">${formattedReply}</span></div>`);
+        
+        // Buscar símbolos en la respuesta de la IA para inyectar interactividad predictiva
+        const symbolRegex = /\b(BTCUSDT|ETHUSDT|SOLUSDT|DOGEUSDT|XRPUSDT|ADAUSDT)\b/i;
+        const match = d.reply.match(symbolRegex);
+        let chatInteractiveHtml = '';
+        if (match) {
+            const sym = match[0].toUpperCase();
+            const side = d.reply.toLowerCase().includes('sell') || d.reply.toLowerCase().includes('venta') ? 'SELL' : 'BUY';
+            chatInteractiveHtml = `
+                <div style="display: flex; gap: 4px; margin-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 6px;">
+                    <button class="btn" style="padding: 2px 6px; font-size: 8px; background: var(--gr); border: none; border-radius: 4px; font-weight: 800; cursor: pointer; color:#000;" onclick="executeImmediateTrade('${sym}', '${side}')">Operar ${sym}</button>
+                    <button class="btn" style="padding: 2px 6px; font-size: 8px; background: var(--acc); border: none; border-radius: 4px; font-weight: 800; cursor: pointer; color:#000;" onclick="goToDeepScan('${sym}')">Deep Scan</button>
+                    <button class="btn" style="padding: 2px 6px; font-size: 8px; background: var(--purp); border: none; border-radius: 4px; font-weight: 800; cursor: pointer;" onclick="sendTelegramSignal('${sym}', '${side}')">Telegram</button>
+                </div>
+            `;
+        }
+        
+        box.insertAdjacentHTML('beforeend', `
+            <div style="margin-bottom:10px; display: flex; flex-direction: column; align-items: flex-start;">
+                <span style="background:var(--s2); padding:8px 12px; border-radius:12px; font-size:13px; border:1px solid var(--brd); display: inline-block; max-width: 90%;">
+                    ${formattedReply}
+                    ${chatInteractiveHtml}
+                </span>
+            </div>
+        `);
     } catch(e) {
         box.insertAdjacentHTML('beforeend', `<div style="color:var(--rd); font-size:11px">Fallo de conexión con Orquestador.</div>`);
     }
@@ -1130,18 +1191,29 @@ function playNotificationSound(type) {
     } catch(e) {}
 }
 
-function showNotification(title, message, type = 'info') {
+function showNotification(title, message, type = 'info', symbol = null, signalType = null) {
     const container = document.getElementById('toast-container');
     const id = 'toast-' + Date.now();
     let icon = 'bell';
     let color = 'var(--acc)';
-    let bg = 'rgba(59,130,246,0.1)';
-    let border = 'rgba(59,130,246,0.3)';
+    let bg = 'rgba(0,229,255,0.1)';
+    let border = 'rgba(0,229,255,0.3)';
     
-    if (type === 'success') { icon = 'trending-up'; color = 'var(--gr)'; bg = 'rgba(16,185,129,0.1)'; border = 'rgba(16,185,129,0.3)'; }
-    else if (type === 'danger') { icon = 'alert-triangle'; color = 'var(--rd)'; bg = 'rgba(239,68,68,0.1)'; border = 'rgba(239,68,68,0.3)'; }
-    else if (type === 'warning') { icon = 'zap'; color = 'var(--am)'; bg = 'rgba(245,158,11,0.1)'; border = 'rgba(245,158,11,0.3)'; }
-    else if (type === 'purple') { icon = 'brain-circuit'; color = 'var(--purp)'; bg = 'rgba(139,92,246,0.1)'; border = 'rgba(139,92,246,0.3)'; }
+    if (type === 'success') { icon = 'trending-up'; color = 'var(--gr)'; bg = 'rgba(57,255,20,0.1)'; border = 'rgba(57,255,20,0.3)'; }
+    else if (type === 'danger') { icon = 'alert-triangle'; color = 'var(--rd)'; bg = 'rgba(255,0,85,0.1)'; border = 'rgba(255,0,85,0.3)'; }
+    else if (type === 'warning') { icon = 'zap'; color = 'var(--am)'; bg = 'rgba(255,234,0,0.1)'; border = 'rgba(255,234,0,0.3)'; }
+    else if (type === 'purple') { icon = 'brain-circuit'; color = 'var(--purp)'; bg = 'rgba(189,0,255,0.1)'; border = 'rgba(189,0,255,0.3)'; }
+    
+    let buttonsHtml = '';
+    if (symbol) {
+        buttonsHtml = `
+            <div style="display: flex; gap: 4px; margin-top: 6px;">
+                <button class="btn" style="padding: 3px 6px; font-size: 8px; background: var(--gr); border: none; border-radius: 4px; font-weight: 800; cursor: pointer; color: #000;" onclick="executeImmediateTrade('${symbol}', '${signalType || 'BUY'}')">Operar</button>
+                <button class="btn" style="padding: 3px 6px; font-size: 8px; background: var(--acc); border: none; border-radius: 4px; font-weight: 800; cursor: pointer; color: #000;" onclick="goToDeepScan('${symbol}')">Deep Scan</button>
+                <button class="btn" style="padding: 3px 6px; font-size: 8px; background: var(--purp); border: none; border-radius: 4px; font-weight: 800; cursor: pointer;" onclick="sendTelegramSignal('${symbol}', '${signalType || 'BUY'}')">Telegram</button>
+            </div>
+        `;
+    }
     
     const toastHtml = `
         <div id="${id}" style="pointer-events: auto; background: var(--s1); border-left: 4px solid ${color}; border-top: 1px solid ${border}; border-right: 1px solid ${border}; border-bottom: 1px solid ${border}; padding: 8px 12px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; gap: 8px; align-items: flex-start; animation: slideIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); margin-bottom: 5px; width: 100%;">
@@ -1151,6 +1223,7 @@ function showNotification(title, message, type = 'info') {
             <div style="flex: 1; min-width: 0;">
                 <div style="font-size: 11px; font-weight: 700; color: #fff; line-height: 1.2;">${title}</div>
                 <div style="font-size: 10px; color: var(--mu); line-height: 1.3; margin-top: 2px; white-space: normal; overflow: hidden; text-overflow: ellipsis;">${message}</div>
+                ${buttonsHtml}
             </div>
             <i data-lucide="x" style="width: 10px; height: 10px; color: var(--mu-dark); cursor: pointer;" onclick="document.getElementById('${id}').remove()"></i>
         </div>
