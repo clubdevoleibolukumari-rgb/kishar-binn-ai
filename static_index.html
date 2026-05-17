@@ -202,6 +202,138 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
 .op-btn { flex: 1; padding: 15px; background: var(--s3); color: var(--mu); border: 1px solid var(--brd); transition: all 0.3s; }
 .op-btn:hover { background: rgba(255,255,255,0.05); }
 .op-btn.active { background: rgba(59,130,246,0.15); color: var(--acc); border-color: var(--acc); box-shadow: 0 0 15px var(--acc-glow); }
+
+/* BATTLE DEBATE SYSTEM */
+.debate-room-container {
+    background: radial-gradient(circle at bottom, rgba(139,92,246,0.03), transparent 70%);
+    border: 1px dashed rgba(255,255,255,0.05);
+    border-radius: var(--rad);
+    padding: 12px;
+    margin-top: 15px;
+}
+.debate-stream {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 380px;
+    overflow-y: auto;
+    padding-right: 4px;
+    scroll-behavior: smooth;
+}
+.debate-message {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    opacity: 0;
+    transform: translateY(10px);
+    animation: bubbleFadeIn 0.4s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+@keyframes bubbleFadeIn {
+    to { opacity: 1; transform: translateY(0); }
+}
+.debate-message.right {
+    flex-direction: row-reverse;
+}
+.agent-avatar-box {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--s3);
+    padding: 1px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+    position: relative;
+    border: 1.5px solid var(--brd);
+    transition: all 0.3s;
+}
+.debate-message:hover .agent-avatar-box {
+    transform: scale(1.15) rotate(4deg);
+}
+.agent-avatar {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+.dialogue-bubble {
+    background: var(--s2);
+    border: 1.5px solid var(--brd);
+    padding: 8px 12px;
+    border-radius: 12px;
+    max-width: 82%;
+    position: relative;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    line-height: 1.35;
+}
+.debate-message.right .dialogue-bubble {
+    background: rgba(139,92,246,0.06);
+    border-color: rgba(139,92,246,0.3);
+    box-shadow: 0 4px 15px rgba(139,92,246,0.1);
+}
+.dialogue-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+    gap: 8px;
+}
+.agent-name {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+.agent-role-badge {
+    font-size: 8px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+}
+.dialogue-text {
+    font-size: 11px;
+    color: var(--tx);
+    word-break: break-word;
+}
+/* Visor Glowing effect */
+.glowing-eye {
+    animation: pulseGlow 1.8s infinite ease-in-out;
+}
+@keyframes pulseGlow {
+    0% { opacity: 0.7; }
+    50% { opacity: 1; }
+    100% { opacity: 0.7; }
+}
+
+/* GENERAL CONSENSUS MONITOR DECK */
+.monitor-frame {
+    background: radial-gradient(circle at center, rgba(16,185,129,0.02), rgba(0,0,0,0.4) 100%), var(--s2);
+    border: 2px solid var(--brd);
+    border-radius: var(--rad);
+    padding: 12px;
+    position: relative;
+    box-shadow: inset 0 0 20px rgba(0,255,100,0.05), var(--shadow);
+    overflow: hidden;
+}
+.monitor-frame::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 255, 0, 0.06));
+    z-index: 10;
+    background-size: 100% 3px, 6px 100%;
+    pointer-events: none;
+}
+.monitor-sweep {
+    position: absolute;
+    top: -100px; left: 0; right: 0; height: 100px;
+    background: linear-gradient(to bottom, transparent, rgba(16,185,129,0.08), transparent);
+    animation: radarSweep 6s linear infinite;
+    z-index: 5;
+    pointer-events: none;
+}
+@keyframes radarSweep {
+    0% { top: -100px; }
+    100% { top: 100%; }
+}
 </style>
 </head>
 <body>
@@ -387,15 +519,6 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
                                 <div class="pipeline-step" id="p-cons"><div class="pipeline-label">Consenso</div></div>
                             </div>
                             
-                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:25px;">
-                                <div style="background:var(--s2); padding:15px; border-radius:8px; border:1px solid var(--brd)">
-                                    <div style="font-size:10px; color:var(--mu);">TENDENCIA MACRO</div>
-                                    <div id="v-macro" style="font-size:14px; font-weight:800; color:var(--tx)">--</div>
-                                </div>
-                                <div style="background:var(--s2); padding:15px; border-radius:8px; border:1px solid var(--brd)">
-                                    <div style="font-size:10px; color:var(--mu);">TENDENCIA MICRO</div>
-                                    <div id="v-micro" style="font-size:14px; font-weight:800; color:var(--tx)">--</div>
-                                </div>
                             <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px; margin-top:15px;">
                                 <div style="background:var(--s2); padding:10px; border-radius:6px; border:1px solid var(--brd)">
                                     <div style="font-size:9px; color:var(--mu); text-transform:uppercase;">Tendencia Macro</div>
@@ -428,63 +551,33 @@ body { background: var(--bg); color: var(--tx); height: 100vh; overflow: hidden;
                                 <div id="v-time" style="font-size:11px; font-weight:700; color:#fff">--</div>
                             </div>
 
-                            <!-- DEBATE DE AGENTES ESTRUCTURADO Y DE ALTO COLOR -->
-                            <div style="margin-top:15px; display: flex; flex-direction: column; gap: 8px;">
-                                <h4 style="font-size:10px; color:var(--mu); text-transform:uppercase; letter-spacing:0.1em; margin-bottom: 2px;">Debate de Agentes de Consenso</h4>
-                                
-                                <!-- Agente Técnico -->
-                                <div style="background: rgba(16,185,129,0.04); border-left: 3px solid var(--gr); border-top: 1px solid rgba(16,185,129,0.15); border-right: 1px solid rgba(16,185,129,0.15); border-bottom: 1px solid rgba(16,185,129,0.15); padding: 8px 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 2px;">
-                                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                                        <span style="font-size:10px; font-weight:800; color:var(--gr); display:flex; align-items:center; gap:4px;"><i data-lucide="trending-up" style="width:10px; height:10px;"></i> AGENTE TÉCNICO</span>
-                                        <span id="v-agent-tech-badge" style="font-size:9px; background:rgba(16,185,129,0.2); color:var(--gr); padding:2px 6px; border-radius:4px; font-weight:700;">--</span>
-                                    </div>
-                                    <div style="font-size:10px; color:var(--mu); line-height:1.3; margin-top:2px;">Estructura fractal del precio analizada bajo volumen y medias de momentum.</div>
+                            <!-- SALA DE DEBATE EN VIVO HOLOGRÁFICA (BATTLE ROOM) -->
+                            <div class="debate-room-container">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:6px;">
+                                    <span style="font-size:10px; font-weight:800; color:var(--purp); display:flex; align-items:center; gap:5px;"><i data-lucide="swords" style="width:11px; height:11px;"></i> SALA DE DEBATE HOLOGRÁFICA IA</span>
+                                    <span style="font-size:8px; color:var(--mu); font-family:'Fira Code', monospace; background:rgba(255,255,255,0.03); padding:1px 5px; border-radius:3px;">CONSENSO: MULTI-AGENTE</span>
                                 </div>
-                                
-                                <!-- Agente Fundamental -->
-                                <div style="background: rgba(245,158,11,0.04); border-left: 3px solid var(--am); border-top: 1px solid rgba(245,158,11,0.15); border-right: 1px solid rgba(245,158,11,0.15); border-bottom: 1px solid rgba(245,158,11,0.15); padding: 8px 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 2px;">
-                                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                                        <span style="font-size:10px; font-weight:800; color:var(--am); display:flex; align-items:center; gap:4px;"><i data-lucide="globe" style="width:10px; height:10px;"></i> AGENTE FUNDAMENTAL</span>
-                                        <span id="v-agent-fund-badge" style="font-size:9px; background:rgba(245,158,11,0.2); color:var(--am); padding:2px 6px; border-radius:4px; font-weight:700;">--</span>
+                                <div class="debate-stream" id="debate-chat-box">
+                                    <div style="display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px 10px; text-align:center; color:var(--mu);">
+                                        <i data-lucide="users" style="width:20px; height:20px; color:var(--mu-dark); margin-bottom:6px;"></i>
+                                        <div style="font-size:10px;">Esperando escaneo de mercado para despertar a los agentes chibi...</div>
                                     </div>
-                                    <div style="font-size:10px; color:var(--mu); line-height:1.3; margin-top:2px;">Monitoreo de noticias de la FED, inflación, tasas de interés y datos macroeconómicos en tiempo real.</div>
-                                </div>
-                                
-                                <!-- Agente Sentimiento -->
-                                <div style="background: rgba(59,130,246,0.04); border-left: 3px solid var(--acc); border-top: 1px solid rgba(59,130,246,0.15); border-right: 1px solid rgba(59,130,246,0.15); border-bottom: 1px solid rgba(59,130,246,0.15); padding: 8px 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 2px;">
-                                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                                        <span style="font-size:10px; font-weight:800; color:var(--acc); display:flex; align-items:center; gap:4px;"><i data-lucide="smile" style="width:10px; height:10px;"></i> AGENTE SENTIMIENTO</span>
-                                        <span id="v-agent-sent-badge" style="font-size:9px; background:rgba(59,130,246,0.2); color:var(--acc); padding:2px 6px; border-radius:4px; font-weight:700;">--</span>
-                                    </div>
-                                    <div style="font-size:10px; color:var(--mu); line-height:1.3; margin-top:2px;">Consenso de opinión del mercado retail y flujos de órdenes de libros abiertos.</div>
-                                </div>
-                                
-                                <!-- Agente Riesgo y Veto -->
-                                <div style="background: rgba(239,68,68,0.04); border-left: 3px solid var(--rd); border-top: 1px solid rgba(239,68,68,0.15); border-right: 1px solid rgba(239,68,68,0.15); border-bottom: 1px solid rgba(239,68,68,0.15); padding: 8px 12px; border-radius: 6px; display: flex; flex-direction: column; gap: 2px;">
-                                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                                        <span style="font-size:10px; font-weight:800; color:var(--rd); display:flex; align-items:center; gap:4px;"><i data-lucide="shield-check" style="width:10px; height:10px;"></i> VETO DE RIESGO INSTITUCIONAL</span>
-                                        <span id="v-risk" style="font-size:9px; background:rgba(239,68,68,0.2); color:var(--rd); padding:2px 6px; border-radius:4px; font-weight:700;">--</span>
-                                    </div>
-                                    <div style="font-size:10px; color:var(--mu); line-height:1.3; margin-top:2px;">Aprobación cuantitativa de margen. Restricción estricta de capital de resguardo.</div>
-                                </div>
-
-                                <!-- Orquestador Principal (PM Consensus) -->
-                                <div style="background: rgba(139,92,246,0.04); border-left: 3px solid var(--purp); border-top: 1px solid rgba(139,92,246,0.15); border-right: 1px solid rgba(139,92,246,0.15); border-bottom: 1px solid rgba(139,92,246,0.15); padding: 10px 14px; border-radius: 6px; display: flex; flex-direction: column; gap: 2px;">
-                                    <span style="font-size:11px; font-weight:800; color:var(--purp); display:flex; align-items:center; gap:4px;"><i data-lucide="brain-circuit" style="width:12px; height:12px;"></i> DICTAMEN DE ALBERT-ORQUESTADOR</span>
-                                    <p id="ma-reasoning" style="font-size:11px; line-height:1.4; color:var(--tx); margin-top:4px; font-weight:500;">Ingresa un símbolo, selecciona la temporalidad y presiona Ejecutar Deep Scan para despertar a los agentes...</p>
                                 </div>
                             </div>
                         </div>
                         
-                        <!-- COLUMNA DERECHA: SNIPER Y SCORE -->
+                        <!-- COLUMNA DERECHA: SNIPER Y SCORE (MONITOR CRT DE COMBATE) -->
                         <div>
-                            <h4 style="font-size:11px; color:var(--mu); text-transform:uppercase; letter-spacing:0.1em; text-align: center;">Consenso General</h4>
-                            <div class="gauge-container" style="margin-top: 8px;">
-                                <div class="score-circle" id="score-ring" style="width: 100px; height: 100px; border-width: 6px;">
-                                    <div class="score-val" id="score-val" style="font-size: 28px;">--</div>
-                                    <div class="score-lbl" id="score-str" style="font-size: 9px;">Quality</div>
+                            <h4 style="font-size:10px; color:var(--mu); text-transform:uppercase; letter-spacing:0.1em; text-align: center; margin-bottom: 6px;">Consenso General</h4>
+                            <div class="monitor-frame">
+                                <div class="monitor-sweep"></div>
+                                <div class="gauge-container" style="margin-top: 0; background:transparent; border:none; box-shadow:none; height: 95px; padding: 0;">
+                                    <div class="score-circle" id="score-ring" style="width: 80px; height: 80px; border-width: 5px;">
+                                        <div class="score-val" id="score-val" style="font-size: 24px;">--</div>
+                                        <div class="score-lbl" id="score-str" style="font-size: 8px;">Quality</div>
+                                    </div>
+                                    <div id="consensus-txt" style="margin-top:5px; font-weight:800; font-size:14px; color:var(--mu); text-align: center;">INACTIVO</div>
                                 </div>
-                                <div id="consensus-txt" style="margin-top:8px; font-weight:800; font-size:18px; color:var(--mu); text-align: center;">INACTIVO</div>
                             </div>
 
                             <!-- CAJA SNIPER DE NIVELES IA EN TIEMPO REAL -->
@@ -670,6 +763,100 @@ function sendToDeepAnalysis() {
     runDeepAnalysis();
 }
 
+// DICCIONARIO DE AVATARES CHIBI JAPONESES EN SVG EN ALTA RESOLUCIÓN Y LIGEROS
+const CHIBI_AVATARS = {
+    technical: `<svg class="agent-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="48" fill="#08080a" stroke="var(--gr)" stroke-width="3"/>
+  <path d="M20,40 Q50,-10 80,40" fill="var(--gr)" opacity="0.3"/>
+  <path d="M15,45 Q40,10 55,42 Q70,10 85,45" fill="var(--gr)" opacity="0.5"/>
+  <circle cx="50" cy="55" r="28" fill="#fde047" opacity="0.9"/>
+  <rect x="25" y="42" width="50" height="15" rx="6" fill="#10b981" class="glowing-eye"/>
+  <rect x="30" y="46" width="40" height="3" fill="#fff" opacity="0.8"/>
+  <circle cx="33" cy="62" r="3" fill="#ef4444" opacity="0.5"/>
+  <circle cx="67" cy="62" r="3" fill="#ef4444" opacity="0.5"/>
+  <path d="M47,68 Q50,71 53,68" stroke="#1e293b" stroke-width="2" fill="none"/>
+  <rect x="16" y="48" width="5" height="12" rx="2" fill="var(--gr)"/>
+  <rect x="79" y="48" width="5" height="12" rx="2" fill="var(--gr)"/>
+</svg>`,
+    fundamental: `<svg class="agent-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="48" fill="#08080a" stroke="var(--am)" stroke-width="3"/>
+  <path d="M25,32 C20,10 80,10 75,32" fill="var(--am)" opacity="0.6"/>
+  <circle cx="50" cy="55" r="28" fill="#fde047" opacity="0.9"/>
+  <circle cx="40" cy="52" r="4" fill="#1e293b"/>
+  <circle cx="60" cy="52" r="4" fill="#1e293b"/>
+  <circle cx="42" cy="50" r="1.5" fill="#fff"/>
+  <circle cx="62" cy="50" r="1.5" fill="#fff"/>
+  <circle cx="40" cy="52" r="9" fill="none" stroke="var(--am)" stroke-width="2"/>
+  <circle cx="60" cy="52" r="9" fill="none" stroke="var(--am)" stroke-width="2"/>
+  <line x1="49" y1="52" x2="51" y2="52" stroke="var(--am)" stroke-width="2"/>
+  <circle cx="33" cy="62" r="3" fill="#ef4444" opacity="0.5"/>
+  <circle cx="67" cy="62" r="3" fill="#ef4444" opacity="0.5"/>
+  <path d="M47,67 Q50,70 53,67" stroke="#1e293b" stroke-width="1.5" fill="none"/>
+</svg>`,
+    sentiment: `<svg class="agent-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="48" fill="#08080a" stroke="var(--acc)" stroke-width="3"/>
+  <polygon points="25,25 40,40 20,45" fill="var(--acc)" opacity="0.8"/>
+  <polygon points="75,25 60,40 80,45" fill="var(--acc)" opacity="0.8"/>
+  <polygon points="27,29 37,39 24,42" fill="#f43f5e" opacity="0.6"/>
+  <polygon points="73,29 63,39 76,42" fill="#f43f5e" opacity="0.6"/>
+  <circle cx="50" cy="56" r="26" fill="#ffffff"/>
+  <path d="M36,52 Q40,47 43,52" stroke="#1e293b" stroke-width="2.5" fill="none"/>
+  <path d="M64,52 Q60,47 57,52" stroke="#1e293b" stroke-width="2.5" fill="none"/>
+  <path d="M46,60 Q50,62 54,60" stroke="#1e293b" stroke-width="2" fill="none"/>
+  <circle cx="33" cy="59" r="3" fill="#f43f5e" opacity="0.5"/>
+  <circle cx="67" cy="59" r="3" fill="#f43f5e" opacity="0.5"/>
+  <path d="M30,38 Q50,22 70,38" fill="none" stroke="var(--acc)" stroke-width="4"/>
+  <circle cx="26" cy="48" r="6" fill="var(--acc)"/>
+  <circle cx="74" cy="48" r="6" fill="var(--acc)"/>
+</svg>`,
+    risk: `<svg class="agent-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="48" fill="#08080a" stroke="var(--rd)" stroke-width="3"/>
+  <polygon points="50,15 35,30 65,30" fill="var(--rd)" opacity="0.8"/>
+  <polygon points="50,23 42,30 58,30" fill="#fff" opacity="0.9"/>
+  <circle cx="50" cy="56" r="26" fill="#1d1e2c" stroke="var(--rd)" stroke-width="2"/>
+  <rect x="32" y="53" width="36" height="5" rx="2.5" fill="var(--rd)" class="glowing-eye"/>
+  <rect x="47.5" y="40" width="5" height="31" rx="2.5" fill="var(--rd)" class="glowing-eye"/>
+  <path d="M25,84 Q50,72 75,84" fill="var(--rd)" opacity="0.8"/>
+</svg>`,
+    orchestrator: `<svg class="agent-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="48" fill="#08080a" stroke="var(--purp)" stroke-width="3"/>
+  <path d="M20,45 L15,25 L35,15 L50,22 L65,15 L85,25 L80,45" fill="var(--purp)" opacity="0.7"/>
+  <path d="M30,30 L50,10 L70,30 L60,35 L50,30 L40,35 Z" fill="var(--purp)" opacity="0.9"/>
+  <circle cx="50" cy="55" r="26" fill="#fde047" opacity="0.95"/>
+  <polygon points="28,47 72,47 68,58 32,58" fill="#a78bfa" class="glowing-eye"/>
+  <rect x="35" y="50" width="30" height="2" fill="#fff" opacity="0.8"/>
+  <path d="M46,67 Q50,69 54,65" stroke="#1e293b" stroke-width="2" fill="none"/>
+  <path d="M35,28 L50,18 L65,28" fill="none" stroke="#f59e0b" stroke-width="2"/>
+</svg>`
+};
+
+function addAgentDialogue(agentKey, roleName, text, roleBadgeColor = "var(--acc)", isRight = false) {
+    const box = document.getElementById('debate-chat-box');
+    if (box.innerHTML.includes("Esperando escaneo") || box.innerHTML.includes("Los agentes de consenso")) {
+        box.innerHTML = "";
+    }
+    
+    const msg = document.createElement('div');
+    msg.className = `debate-message ${isRight ? 'right' : ''}`;
+    
+    const avatarSvg = CHIBI_AVATARS[agentKey] || "";
+    
+    msg.innerHTML = `
+        <div class="agent-avatar-box" style="border-color:${roleBadgeColor}">
+            ${avatarSvg}
+        </div>
+        <div class="dialogue-bubble">
+            <div class="dialogue-header">
+                <span class="agent-name" style="color:${roleBadgeColor}">${roleName}</span>
+                <span class="agent-role-badge" style="background:${roleBadgeColor}20; color:${roleBadgeColor}">${agentKey.toUpperCase()}</span>
+            </div>
+            <div class="dialogue-text">${text}</div>
+        </div>
+    `;
+    box.appendChild(msg);
+    box.scrollTop = box.scrollHeight;
+}
+
 async function runDeepAnalysis() {
     const sym = document.getElementById('da-symbol').value.toUpperCase() || "BTCUSDT";
     const timeframe = document.getElementById('da-timeframe').value;
@@ -678,13 +865,21 @@ async function runDeepAnalysis() {
     resetPipeline();
     document.getElementById('btn-exec-analysis').style.display = 'none';
     
-    // Simulación de pasos visuales
-    const steps = ['p-tech', 'p-fund', 'p-sent', 'p-risk', 'p-cons'];
+    // Simulación de pasos visuales con diálogos de los chibis
+    const steps = [
+        { id: 'p-tech', key: 'technical', name: 'Chibi-Técnico 📈', text: '¡Despertando! Iniciando escaneo fractal de mercado... Buscando estructuras de velas en temporalidad ' + timeframe + '.', color: 'var(--gr)', right: false },
+        { id: 'p-fund', key: 'fundamental', name: 'Chibi-Fundamental 📰', 'text': '¡Al aire! Conectando fuentes internacionales. Revisando el impacto macro y reportes de tasas.', color: 'var(--am)', right: false },
+        { id: 'p-sent', key: 'sentiment', name: 'Chibi-Sentimiento 🐱', 'text': '¡Miauuu! Midiendo la codicia y flujos del mercado retail en Binance...', color: 'var(--acc)', right: false },
+        { id: 'p-risk', key: 'risk', name: 'Cyber-Riesgo 🛡️', 'text': 'Analizando límites estrictos Kelly. Asegurando preservación absoluta del balance.', color: 'var(--rd)', right: false },
+        { id: 'p-cons', key: 'orchestrator', name: 'Albert-Orquestador 🧠', 'text': 'Albert-Orquestador PM en línea. Iniciando mesa redonda para lograr el consenso institucional...', color: 'var(--purp)', right: true }
+    ];
+    
     for(let s of steps) {
-        document.getElementById(s).classList.add('active');
-        await new Promise(r => setTimeout(r, 1000));
-        document.getElementById(s).classList.remove('active');
-        document.getElementById(s).classList.add('done');
+        document.getElementById(s.id).classList.add('active');
+        addAgentDialogue(s.key, s.name, s.text, s.color, s.right);
+        await new Promise(r => setTimeout(r, 900));
+        document.getElementById(s.id).classList.remove('active');
+        document.getElementById(s.id).classList.add('done');
     }
 
     try {
@@ -699,14 +894,18 @@ async function runDeepAnalysis() {
 
 function updateAnalysisUI(rep) {
     if(!rep || rep.error) {
-        document.getElementById('ma-reasoning').innerHTML = `<span style="color:var(--rd)">ERROR DE AGENTE: ${rep ? rep.error : 'Fallo de conexión'}</span><br><br>Intente nuevamente.`;
+        const box = document.getElementById('debate-chat-box');
+        box.innerHTML = `<div style="color:var(--rd); text-align:center; padding:20px; font-size:11px;">⚠️ Fallo al conectar con los agentes de consenso. Intenta nuevamente.</div>`;
         document.getElementById('score-val').textContent = "!!";
         document.getElementById('consensus-txt').textContent = "ERROR";
         return;
     }
     
-    // Texto de razonamiento y scores principales
-    document.getElementById('ma-reasoning').innerHTML = rep.reasoning_es.replace(/\n/g, '<br>');
+    // Limpiar simulación y rellenar con el veredicto oficial
+    const box = document.getElementById('debate-chat-box');
+    box.innerHTML = "";
+    
+    // Asignación a variables generales
     document.getElementById('score-val').textContent = rep.score;
     document.getElementById('score-str').textContent = rep.signal_strength;
     document.getElementById('consensus-txt').textContent = rep.consensus;
@@ -731,8 +930,6 @@ function updateAnalysisUI(rep) {
     
     // Niveles Sniper e Indicadores de Confianza
     document.getElementById('v-conf').textContent = rep.confidence + "%";
-    document.getElementById('v-risk').textContent = rep.agents ? rep.agents.risk_veto : "N/A";
-    document.getElementById('v-risk').style.color = rep.agents && rep.agents.risk_veto === "APROBADO" ? "var(--gr)" : "var(--rd)";
     
     // Caja de precios Sniper real en vivo
     document.getElementById('sn-entry').textContent = "$" + rep.entry_price;
@@ -750,13 +947,20 @@ function updateAnalysisUI(rep) {
         execEl.style.fontWeight = "600";
     }
     
-    // Estatus de insignias de agentes individuales
+    // Inyectar diálogos del debate real de los agentes en base a la respuesta del backend
     if(rep.agents) {
-        document.getElementById('v-agent-tech-badge').textContent = rep.agents.technical;
-        document.getElementById('v-agent-tech-badge').style.color = rep.agents.technical.includes("Bull") || rep.agents.technical.includes("Aprobado") ? "var(--gr)" : "var(--rd)";
+        addAgentDialogue('technical', 'Chibi-Técnico 📈', `Estructuras escaneadas con éxito. ${rep.agents.technical}`, 'var(--gr)', false);
+        addAgentDialogue('fundamental', 'Chibi-Fundamental 📰', `Impacto analizado: ${rep.agents.fundamental}`, 'var(--am)', false);
+        addAgentDialogue('sentiment', 'Chibi-Sentimiento 🐱', `Flujos de órdenes evaluados. ${rep.agents.sentiment}`, 'var(--acc)', false);
         
-        document.getElementById('v-agent-fund-badge').textContent = rep.agents.fundamental.length > 15 ? rep.agents.fundamental.substring(0, 15) + "..." : rep.agents.fundamental;
-        document.getElementById('v-agent-sent-badge').textContent = rep.agents.sentiment;
+        const isAproved = rep.agents.risk_veto === "APROBADO";
+        const riskMsg = isAproved 
+            ? '🟢 Aprobado sin objeciones. Ratio R:R saludable y volatilidad óptima para el tamaño de cuenta micro.' 
+            : '🔴 VETO ACTIVADO: Riesgo fuera de parámetros institucionales. Preservando capital al 100%.';
+        addAgentDialogue('risk', 'Cyber-Riesgo 🛡️', riskMsg, 'var(--rd)', false);
+        
+        const debateEnd = `<b>¡CONSENSO LOGRADO!</b> Sentencia ejecutiva: <b style="color:${rep.decision === 'BUY' ? 'var(--gr)' : 'var(--rd)'}">${rep.decision}</b> con un Score del <b>${rep.score}%</b>.<br><br><i>Dictamen deAlbert-Orquestador:</i> ${rep.reasoning_es.replace(/\n/g, '<br>')}`;
+        addAgentDialogue('orchestrator', 'Albert-Orquestador 🧠', debateEnd, 'var(--purp)', true);
     }
     
     const ring = document.getElementById('score-ring');
@@ -783,31 +987,42 @@ function updateAnalysisUI(rep) {
 
 function resetPipeline() {
     ['p-tech', 'p-fund', 'p-sent', 'p-risk', 'p-cons'].forEach(id => {
-        document.getElementById(id).className = 'pipeline-step';
+        const el = document.getElementById(id);
+        if (el) el.className = 'pipeline-step';
     });
-    document.getElementById('score-val').textContent = "--";
-    document.getElementById('score-str').textContent = "Quality";
-    document.getElementById('consensus-txt').textContent = "INACTIVO";
-    document.getElementById('v-macro').textContent = "--";
-    document.getElementById('v-micro').textContent = "--";
-    document.getElementById('v-vol').textContent = "--";
-    document.getElementById('v-volat').textContent = "--";
-    document.getElementById('v-force').textContent = "--";
-    document.getElementById('v-class').textContent = "--";
-    document.getElementById('v-time').textContent = "--";
-    document.getElementById('v-recom').textContent = "--";
     
-    document.getElementById('sn-entry').textContent = "--";
-    document.getElementById('sn-tp').textContent = "--";
-    document.getElementById('sn-sl').textContent = "--";
-    document.getElementById('sn-exec-status').textContent = "Escaneando estructuras de mercado...";
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+    };
     
-    document.getElementById('v-agent-tech-badge').textContent = "--";
-    document.getElementById('v-agent-fund-badge').textContent = "--";
-    document.getElementById('v-agent-sent-badge').textContent = "--";
-    document.getElementById('v-risk').textContent = "--";
+    setVal('score-val', "--");
+    setVal('score-str', "Quality");
+    setVal('consensus-txt', "INACTIVO");
+    setVal('v-macro', "--");
+    setVal('v-micro', "--");
+    setVal('v-vol', "--");
+    setVal('v-volat', "--");
+    setVal('v-force', "--");
+    setVal('v-class', "--");
+    setVal('v-time', "--");
+    setVal('v-recom', "--");
     
-    document.getElementById('ma-reasoning').textContent = "Analizando estructuras de mercado...";
+    setVal('sn-entry', "--");
+    setVal('sn-tp', "--");
+    setVal('sn-sl', "--");
+    setVal('sn-exec-status', "Escaneando estructuras de mercado...");
+    
+    const chatBox = document.getElementById('debate-chat-box');
+    if (chatBox) {
+        chatBox.innerHTML = `
+            <div style="display:flex; flex-direction:column; justify-content:center; align-items:center; padding:30px 10px; text-align:center; color:var(--mu);">
+                <i data-lucide="users" style="width:20px; height:20px; color:var(--mu-dark); margin-bottom:6px;"></i>
+                <div style="font-size:10px;">Esperando escaneo de mercado para despertar a los agentes chibi...</div>
+            </div>
+        `;
+        if (window.lucide) lucide.createIcons();
+    }
 }
 
 // Config Mode Handling
