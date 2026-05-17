@@ -18,6 +18,24 @@ load_dotenv()
 
 app = FastAPI(title="KISHAR-BINN_AI ELITE MONITOR")
 
+# ═══════════════════════════════════════════════════════════════
+# Cargar el HTML al nivel del módulo para que Vercel (serverless)
+# lo incluya en el bundle y no falle al buscar el archivo en disco.
+# ═══════════════════════════════════════════════════════════════
+_DASHBOARD_HTML = ""
+try:
+    _html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_index.html")
+    with open(_html_path, "r", encoding="utf-8") as _f:
+        _DASHBOARD_HTML = _f.read()
+except Exception as _e:
+    _DASHBOARD_HTML = f"""<!DOCTYPE html><html><head><title>KISHAR-BINN AI</title></head>
+<body style='background:#08080c;color:#00e5ff;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;'>
+<h1 style='font-size:2em;'>KISHAR-BINN AI</h1>
+<p style='color:#39ff14'>Sistema Online - API Activa</p>
+<p style='color:#94a3b8;font-size:.9em'>Error cargando interfaz: {_e}</p>
+<a href='/api/state' style='color:#00e5ff;margin-top:20px;'>Ver estado del sistema (JSON)</a>
+</body></html>"""
+
 @app.get("/api/positions")
 async def get_positions():
     """Retorna las posiciones activas en formato JSON para el frontend"""
@@ -351,11 +369,7 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
-    try:
-        with open("static_index.html", "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
-        return f"<h1>Error: {str(e)}</h1>"
+    return HTMLResponse(content=_DASHBOARD_HTML, status_code=200)
 
 if __name__ == "__main__":
     import uvicorn
