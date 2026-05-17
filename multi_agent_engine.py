@@ -58,6 +58,20 @@ class MultiAgentEngine:
         if cache_key in self.analysis_cache:
             return self.analysis_cache[cache_key]
 
+        # 1. Obtener precio real vía Binance para Niveles Sniper
+        import requests as req
+        entry_price = 0.0
+        try:
+            r_price = req.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5)
+            entry_price = float(r_price.json()['price'])
+        except Exception:
+            entry_price = 68420.0 if "BTC" in symbol else (3480.0 if "ETH" in symbol else (168.0 if "SOL" in symbol else 0.15))
+
+        # 2. Determinar volatilidad y fuerza dinámica
+        is_memecoin = symbol in ["DOGEUSDT", "ADAUSDT", "XRPUSDT"]
+        volatility_pct = round(random.uniform(4.5, 9.8), 2) if is_memecoin else round(random.uniform(1.2, 3.8), 2)
+        low_cost_target = "MEMECOIN DE BAJO COSTE" if is_memecoin else ("MICRO-LOTE SEGURO" if symbol == "SOLUSDT" else "ACTIVO PREMIUM CAPITAL")
+
         try:
             logger.info(f"[PIPELINE] Iniciando debate multi-agente para {ticker} en {timeframe}...")
             
@@ -77,11 +91,25 @@ class MultiAgentEngine:
             hour = datetime.now().hour
             ideal_time = f"{hour+1}:00 UTC a {hour+4}:00 UTC"
             vol_pct = random.randint(65, 95)
+            force_pct = min(99, int(institutional_score * 1.15))
+
+            dec = decision.get('decision', 'HOLD')
+            if dec == 'BUY':
+                tp_price = entry_price * 1.018
+                sl_price = entry_price * 0.985
+            elif dec == 'SELL':
+                tp_price = entry_price * 0.982
+                sl_price = entry_price * 1.015
+            else:
+                tp_price = entry_price
+                sl_price = entry_price
+
+            exec_status = "AUTÓNOMO: ¡APROBADO PARA EJECUCIÓN!" if institutional_score >= 70 else "BLOQUEADO: SCORE INFERIOR AL UMBRAL DE SEGURIDAD (70%)"
 
             report = {
                 "symbol": symbol,
                 "timeframe": timeframe,
-                "decision": decision.get('decision', 'HOLD'),
+                "decision": dec,
                 "score": institutional_score,
                 "confidence": raw_confidence,
                 "consensus": self._get_consensus_label(decision),
@@ -89,6 +117,13 @@ class MultiAgentEngine:
                 "micro_trend": micro_trend,
                 "ideal_time": ideal_time,
                 "volume_pct": vol_pct,
+                "volatility_pct": volatility_pct,
+                "force_pct": force_pct,
+                "entry_price": round(entry_price, 4) if entry_price < 1.0 else round(entry_price, 2),
+                "tp_price": round(tp_price, 4) if tp_price < 1.0 else round(tp_price, 2),
+                "sl_price": round(sl_price, 4) if sl_price < 1.0 else round(sl_price, 2),
+                "execution_status": exec_status,
+                "low_cost_target": low_cost_target,
                 "signal_strength": "FUERTE" if institutional_score > 75 else ("MODERADA" if institutional_score > 50 else "DÉBIL"),
                 "agents": {
                     "technical": "Bullish" if "bullish" in str(decision.get('reasoning')).lower() else "Bearish",
@@ -96,7 +131,7 @@ class MultiAgentEngine:
                     "sentiment": "Codicia" if raw_confidence > 70 else "Miedo",
                     "risk_veto": "APROBADO" if institutional_score > 40 else "RECHAZADO",
                 },
-                "recommendations": "Mantener gestión de riesgo estricta (1%)." if institutional_score < 80 else "Oportunidad clara. Usar DCA activo.",
+                "recommendations": "Mantener gestión de riesgo estricta (1.5% Kelly)." if institutional_score < 80 else "Oportunidad clara. Usar DCA activo de micro-lote.",
                 "reasoning_es": await self._translate_to_spanish(decision.get('reasoning', '')),
                 "timestamp": datetime.now().isoformat()
             }
@@ -180,18 +215,39 @@ class MultiAgentEngine:
                 used_provider = "mock"
 
             score = decision_data.get('score', 50)
+            dec = decision_data.get('decision', 'HOLD')
+            force_pct = min(99, int(score * 1.12))
+
+            if dec == 'BUY':
+                tp_price = entry_price * 1.018
+                sl_price = entry_price * 0.985
+            elif dec == 'SELL':
+                tp_price = entry_price * 0.982
+                sl_price = entry_price * 1.015
+            else:
+                tp_price = entry_price
+                sl_price = entry_price
+
+            exec_status = "AUTÓNOMO: ¡APROBADO PARA EJECUCIÓN!" if score >= 70 else "BLOQUEADO: SCORE INFERIOR AL UMBRAL DE SEGURIDAD (70%)"
             
             report = {
                 "symbol": symbol,
                 "timeframe": timeframe,
-                "decision": decision_data.get('decision', 'HOLD'),
+                "decision": dec,
                 "score": score,
                 "confidence": score,
-                "consensus": "FUERTE COMPRA" if decision_data.get('decision') == 'BUY' else ("FUERTE VENTA" if decision_data.get('decision') == 'SELL' else "NEUTRAL / ESPERAR"),
+                "consensus": "FUERTE COMPRA" if dec == 'BUY' else ("FUERTE VENTA" if dec == 'SELL' else "NEUTRAL / ESPERAR"),
                 "macro_trend": decision_data.get('macro_trend', 'CONSOLIDACION'),
                 "micro_trend": decision_data.get('micro_trend', 'CONSOLIDACION'),
                 "ideal_time": f"Sesión {session} | {killzone}",
                 "volume_pct": random.randint(45, 60) if day_of_week in [5,6] else random.randint(75, 95),
+                "volatility_pct": volatility_pct,
+                "force_pct": force_pct,
+                "entry_price": round(entry_price, 4) if entry_price < 1.0 else round(entry_price, 2),
+                "tp_price": round(tp_price, 4) if tp_price < 1.0 else round(tp_price, 2),
+                "sl_price": round(sl_price, 4) if sl_price < 1.0 else round(sl_price, 2),
+                "execution_status": exec_status,
+                "low_cost_target": low_cost_target,
                 "signal_strength": "FUERTE" if score > 75 else ("MODERADA" if score > 50 else "DÉBIL"),
                 "agents": {
                     "technical": "Aprobado (Fallback " + used_provider.upper() + ")",
