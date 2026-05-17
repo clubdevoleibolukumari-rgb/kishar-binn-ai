@@ -23,6 +23,7 @@ import logging
 import hmac
 import hashlib
 import requests
+import asyncio
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -32,9 +33,11 @@ from enum import Enum
 import threading
 from dotenv import load_dotenv
 from ai_orchestrator import AIOrchestrator
+from multi_agent_engine import engine as ma_engine
 
 # Cargar variables de entorno
 load_dotenv()
+
 
 # ═══════════════════════════════════════════════════════════════
 # CONFIGURACIÓN
@@ -60,27 +63,23 @@ class Config:
     STOP_LOSS_PCT = 1.0       # Stop Loss por operación individual
     MIN_BALANCE_CORE = 2.0    # No operar si el balance baja de $2 para proteger el honorario de red
     
-    # Capital
-    INITIAL_CAPITAL = 2.80
-    TIER1_THRESHOLD = 1.0     # Umbral para activar Tier 2 (DCA)
-    TIER2_THRESHOLD = 5.0     # Umbral para activar Tier 3 (Grid)
+    # Capital y Presupuesto
+    INITIAL_CAPITAL = 10.0    # Capital objetivo inicial
+    MAX_TRADING_BUDGET = 10.0 # Máximo capital a utilizar para trading activo
+    TIER1_THRESHOLD = 5.0     # Umbral para activar Tier 2 (DCA)
+    TIER2_THRESHOLD = 15.0    # Umbral para activar Tier 3 (Grid)
     
     # Estrategia Earn
     EARN_PRODUCT = "FDUSD"    
     EARN_APR = 0.118          
     AUTO_SUBSCRIBE = True
     
-    # DCA Config
-    DCA_ENABLED = False       
-    DCA_AMOUNT = 1.0          
-    DCA_FREQUENCY = "daily"   
-    DCA_PAIR = "BTCUSDT"
+    # Smart Execution Config (Sustituye DCA/Grid)
+    SMART_EXEC_ENABLED = True
     
-    # Grid Trading Config (Tier 2+)
-    GRID_ENABLED = False
-    GRID_PAIR = "SOLUSDT"
-    GRID_LEVELS = 20
-    GRID_RANGE_PCT = 20       
+    # Activos Optimizados para Micro-Cuentas ($10 USD)
+    # Seleccionamos activos con alta volatilidad predecible y que permiten ordenes mínimas de $5 USDT
+    ACTIVE_PAIRS = ["SOLUSDT", "DOGEUSDT", "XRPUSDT", "ADAUSDT", "BTCUSDT"]
     
     # Referidos
     REFERRAL_LINK = os.getenv('BINANCE_REF_LINK', '')
@@ -183,6 +182,24 @@ class BinanceClient:
     def get_account(self) -> Dict:
         """Obtiene información de la cuenta"""
         return self._request('GET', '/api/v3/account', signed=True)
+    def get_futures_balance(self) -> float:
+        """Obtiene el balance total de la billetera de futuros USDT-M"""
+        try:
+            # Endpoint para futuros: /fapi/v2/account
+            fbase = 'https://fapi.binance.com'
+            ts = int(time.time() * 1000)
+            qs = f"timestamp={ts}&recvWindow=5000"
+            sig = self._generate_signature(qs)
+            
+            headers = {'X-MBX-APIKEY': self.api_key}
+            r = requests.get(f"{fbase}/fapi/v2/account?{qs}&signature={sig}", headers=headers, timeout=10)
+            data = r.json()
+            if isinstance(data, dict) and 'totalWalletBalance' in data:
+                return float(data['totalWalletBalance'])
+        except Exception as e:
+            logger.error(f"Error en get_futures_balance: {e}")
+        return 0.0
+
     def get_balance(self, asset: str = 'USDT') -> float:
         """Obtiene balance de un activo sumando Spot y Funding de forma segura"""
         total = 0.0
@@ -204,8 +221,21 @@ class BinanceClient:
             logger.error(f"Error en get_balance para {asset}: {e}")
         return float(total)
 
+
+    def get_margin_balance(self) -> float:
+        """Obtiene el balance neto de la cuenta de margen"""
+        try:
+            res = self._request('GET', '/sapi/v1/margin/account', signed=True)
+            if isinstance(res, dict) and 'totalNetAssetOfGui' in res:
+                return float(res['totalNetAssetOfGui'])
+            elif isinstance(res, dict) and 'totalNetAsset' in res:
+                return float(res['totalNetAsset'])
+        except Exception as e:
+            logger.error(f"Error en get_margin_balance: {e}")
+        return 0.0
+
     def get_total_net_worth(self) -> float:
-        """Calcula el valor neto total en USDT de todas las billeteras y activos"""
+        """Calcula el valor neto total consolidado (Spot + Funding + Earn + Futures + Margin)"""
         total_usdt = 0.0
         assets = {}
 
@@ -231,7 +261,15 @@ class BinanceClient:
                     qty = float(r.get('totalAmount', 0))
                     if qty > 0: assets[r['asset']] = assets.get(r['asset'], 0.0) + qty
 
-            # 4. Conversión a USDT
+            # 4. Balances de FUTUROS
+            futures = self.get_futures_balance()
+            total_usdt += futures
+
+            # 5. Balance de MARGEN
+            margin = self.get_margin_balance()
+            total_usdt += margin
+
+            # 6. Conversión a USDT de otros activos
             for asset, qty in assets.items():
                 if asset in ['USDT', 'USDC', 'DAI']:
                     total_usdt += qty
@@ -244,9 +282,21 @@ class BinanceClient:
                         pass
             
             return round(float(total_usdt), 4)
+
         except Exception as e:
             logger.error(f"Error crítico en Net Worth: {e}")
             return 0.0
+
+    def get_open_orders(self, symbol: str = None) -> List[Dict]:
+        """Obtiene las órdenes abiertas de spot"""
+        params = {}
+        if symbol: params['symbol'] = symbol
+        return self._request('GET', '/api/v3/openOrders', params, signed=True)
+    
+    def cancel_order(self, symbol: str, order_id: int) -> Dict:
+        """Cancela una orden abierta"""
+        return self._request('DELETE', '/api/v3/order', {'symbol': symbol, 'orderId': order_id}, signed=True)
+
 
     # Market Data
     def get_ticker(self, symbol: str) -> Dict:
@@ -337,126 +387,200 @@ class BinanceClient:
 # ═══════════════════════════════════════════════════════════════
 
 class DecisionEngine:
-    """Motor de Decisiones Basado en IA Orquestada"""
+    """Motor de Decisiones Basado en IA Orquestada y Q-Learning"""
     
     def __init__(self, client: BinanceClient):
         self.client = client
         self.orchestrator = AIOrchestrator(Config.IA_KEYS)
         self.last_decision = "Iniciando sistema autónomo..."
-    
+        self.q_table_file = "qlearning_memory.json"
+        self._load_q_table()
+        
+    def _load_q_table(self):
+        if os.path.exists(self.q_table_file):
+            try:
+                with open(self.q_table_file, 'r') as f:
+                    self.q_table = json.load(f)
+            except: self.q_table = {}
+        else: self.q_table = {}
+        
+    def _save_q_table(self):
+        with open(self.q_table_file, 'w') as f:
+            json.dump(self.q_table, f, indent=4)
+
+    def manage_open_orders(self):
+        """Mapea y gestiona órdenes huérfanas o heredadas en Binance"""
+        logger.info("[ORQUESTADOR] Escaneando órdenes abiertas en Binance...")
+        try:
+            orders = self.client.get_open_orders()
+            if isinstance(orders, list) and len(orders) > 0:
+                logger.info(f"[ORQUESTADOR] Se encontraron {len(orders)} órdenes abiertas. IA analizando...")
+                for order in orders:
+                    symbol = order['symbol']
+                    price = order['price']
+                    side = order['side']
+                    logger.info(f" -> Orden detectada: {side} {symbol} a {price}")
+                    
+                    # Ejecutar validación con TradingAgents
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    analysis = loop.run_until_complete(ma_engine.run_deep_analysis(symbol, "1H"))
+                    
+                    score = analysis.get('score', 50)
+                    consensus = analysis.get('decision', 'HOLD')
+                    
+                    if (side == 'BUY' and consensus == 'SELL' and score > 70) or \
+                       (side == 'SELL' and consensus == 'BUY' and score > 70):
+                        logger.warning(f"[ORQUESTADOR] 🚨 Orden {order['orderId']} contradice el dictamen IA ({consensus}). CANCELANDO ORDEN.")
+                        self.client.cancel_order(symbol, order['orderId'])
+                    else:
+                        logger.info(f"[ORQUESTADOR] ✅ Orden {order['orderId']} aprobada por la IA.")
+            else:
+                logger.info("[ORQUESTADOR] No hay órdenes pendientes.")
+        except Exception as e:
+            logger.error(f"[ORQUESTADOR] Fallo al gestionar órdenes abiertas: {e}")
+
     def analyze_and_optimize(self, portfolio_state: Dict):
-        """Usa la IA para optimizar parametros del sistema"""
+        """Usa la IA para optimizar parametros con refuerzo persistente"""
         try:
             self.current_status = "🤖 IA Pensando y Optimizando..."
-            # Recolectar datos actuales
-            prices = self.client.get_ticker(Config.GRID_PAIR)
-            klines = self.client.get_klines(Config.GRID_PAIR, limit=5).to_json()
+            
+            # Estado para Q-Learning
+            state_key = f"tier_{portfolio_state.get('tier', 'INIT')}_bal_{round(portfolio_state.get('total_balance', 0) / 10)}"
+            if state_key not in self.q_table:
+                self.q_table[state_key] = {"rewards": 0, "visits": 0}
+            self.q_table[state_key]["visits"] += 1
+            self._save_q_table()
+
+            prices = self.client.get_ticker(Config.ACTIVE_PAIRS[0])
+            klines = self.client.get_klines(Config.ACTIVE_PAIRS[0], limit=5).to_json()
             
             prompt = f"""
             Analiza el estado actual de mi bot de Binance:
             Estado: {json.dumps(portfolio_state)}
-            Datos Mercado ({Config.GRID_PAIR}): {json.dumps(prices)}
+            Datos Mercado: {json.dumps(prices)}
             Ultimas Velas: {klines}
+            Memoria Q-Learning State: {state_key} (Visitas: {self.q_table[state_key]["visits"]}, Recompensa Acumulada: {self.q_table[state_key]["rewards"]})
             
-            Objetivo: Maximizar ROI con capital bajo ($2.80).
-            Tareas:
-            1. ¿Debo cambiar el par de Grid/DCA?
-            2. ¿Ajusto el rango del Grid ({Config.GRID_RANGE_PCT}%)?
-            3. Dame un mensaje motivacional corto para el reporte.
+            Objetivo: Maximizar ROI con presupuesto estricto de $10 USD.
             
-            Responde en formato JSON: {{"pair": "...", "grid_range": 20, "message": "..."}}
+            Responde obligatoriamente en JSON estricto: {{"pair": "SOLUSDT", "grid_range": 20, "message": "..."}}
             """
             
-            response, ai_provider = self.orchestrator.ask_ai(prompt, system_context="Eres un experto en trading algorítmico institucional.")
+            response, ai_provider = self.orchestrator.ask_ai(prompt, system_context="Eres un experto institucional de Q-Learning y Trading.")
             logger.info(f"[AI-ENGINE] Respuesta obtenida vía: {ai_provider}")
             
-            # Intentar parsear respuesta JSON (limpiando posibles markdown)
             content = response.strip()
-            if '```json' in content:
-                content = content.split('```json')[1].split('```')[0].strip()
-            elif '```' in content:
-                content = content.split('```')[1].split('```')[0].strip()
+            if '```json' in content: content = content.split('```json')[1].split('```')[0].strip()
+            elif '```' in content: content = content.split('```')[1].split('```')[0].strip()
             
-            try:
-                decision = json.loads(content)
-            except json.JSONDecodeError:
-                # Fallback: intentar encontrar JSON con regex o tomar valores por defecto
-                logger.warning("[AI-ENGINE] Respuesta IA no es JSON puro. Usando valores por defecto.")
-                decision = {"pair": Config.GRID_PAIR, "grid_range": Config.GRID_RANGE_PCT, "message": "IA analizando..."}
+            try: decision = json.loads(content)
+            except: decision = {"pair": Config.ACTIVE_PAIRS[0], "grid_range": 5.0, "message": "IA optimizando parámetros..."}
             
-            # Aplicar cambios si la IA lo sugiere
-            if "pair" in decision:
-                Config.GRID_PAIR = decision['pair']
-                Config.DCA_PAIR = decision['pair']
+            if "pair" in decision and decision["pair"] not in Config.ACTIVE_PAIRS:
+                Config.ACTIVE_PAIRS.insert(0, decision['pair'])
             if "grid_range" in decision:
-                Config.GRID_RANGE_PCT = decision['grid_range']
+                Config.GRID_RANGE_PCT = float(decision['grid_range'])
             
-            self.last_decision = decision.get('message', "Optimización completada.")
-            logger.info(f"[AI-ENGINE] Nueva estrategia aplicada: {decision}")
+            self.last_decision = decision.get('message', "Memoria de aprendizaje actualizada.")
+            logger.info(f"[AI-ENGINE] Memoria Persistente y Estrategia aplicadas: {decision}")
+            
             return decision
             
         except Exception as e:
             logger.error(f"[AI-ENGINE] Error en optimización: {e}")
             return None
 
-class AdaptiveRiskController:
-    """Auto-ajusta los parámetros operativos en tiempo real según el mercado"""
+class QuantitativeRiskManager:
+    """Gestión Cuantitativa de Riesgo (Fraccional y Adaptativo)"""
     def __init__(self, client: BinanceClient):
         self.client = client
-        self.market_state = "NORMAL" # NORMAL, VOLATILE, EXTREME
+        self.market_state = "NORMAL"
+        self.dynamic_multiplier = 1.0
+        
+    def calculate_kelly_fraction(self, ai_score: float, risk_reward_ratio: float = 1.5) -> float:
+        """Criterio de Kelly matemático (Suavizado / Half-Kelly)"""
+        win_prob = ai_score / 100.0
+        if win_prob < 0.5: return 0.0
+        
+        # Kelly Formula = W - [(1-W)/R]
+        kelly_pct = win_prob - ((1.0 - win_prob) / risk_reward_ratio)
+        safe_kelly = max(0.0, (kelly_pct / 2.0)) # Half-Kelly por seguridad institucional
+        return safe_kelly
+
+    def get_smart_allocation(self, ai_score: float, balance: float) -> float:
+        """Determina el microlote exacto basado en el balance dinámico"""
+        # Si la cuenta crece > 50% ($15), aceleramos ligeramente el crecimiento (Efecto Bola de Nieve)
+        if balance >= 20.0: self.dynamic_multiplier = 1.5
+        elif balance >= 15.0: self.dynamic_multiplier = 1.2
+        else: self.dynamic_multiplier = 1.0
+            
+        kelly_fraction = self.calculate_kelly_fraction(ai_score)
+        allocation = balance * kelly_fraction * self.dynamic_multiplier
+        
+        # Regla inquebrantable de control de ruina: Nunca arriesgar más del 20% del balance por trade
+        max_allowed = balance * 0.20
+        final_allocation = min(allocation, max_allowed)
+        
+        # Binance permite micro-lotes de $1 USDT en múltiples pares Spot (DOGE, ADA, etc.).
+        # Si el Kelly nos dice un monto menor a $1.1, forzamos la entrada mínima de $1.1 para poder participar.
+        if final_allocation < 1.1 and balance >= 1.2:
+            final_allocation = 1.1
+            
+        return round(final_allocation, 2)
+
+    def calculate_smart_breakeven(self, entry_price: float, side: str, spread_pct: float = 0.05) -> float:
+        """Breakeven Matemático Real (Entrada + Spread + Comisiones Exchange + Micro-ganancia)"""
+        exchange_fee = 0.20 # 0.1% maker + 0.1% taker en Binance Spot
+        buffer_profit = 0.05 # 0.05% de ganancia segura base
+        total_markup = (exchange_fee + spread_pct + buffer_profit) / 100.0
+        
+        if side == 'BUY': return entry_price * (1 + total_markup)
+        else: return entry_price * (1 - total_markup)
         
     def evaluate_market_conditions(self, symbol: str) -> Dict:
-        """Mide la volatilidad (ATR aproximado) para adaptar el riesgo"""
+        """Sondeo de volatilidad vía ATR simplificado"""
         try:
             df = self.client.get_klines(symbol, interval='1h', limit=24)
             if df.empty: return {}
             
-            # Cálculo de volatilidad (High - Low) / Close
             df['volatility'] = (df['high'] - df['low']) / df['close']
-            avg_vol = df['volatility'].mean() * 100 # en porcentaje
+            avg_vol = df['volatility'].mean() * 100
             
-            if avg_vol > 5.0:
-                self.market_state = "EXTREME"
-                # Mercado loco: Aumentar rango del Grid, reducir exposición
-                Config.GRID_RANGE_PCT = 30.0
-                Config.STOP_LOSS_PCT = 2.0
-            elif avg_vol > 2.0:
-                self.market_state = "VOLATILE"
-                Config.GRID_RANGE_PCT = 15.0
-                Config.STOP_LOSS_PCT = 1.0
-            else:
-                self.market_state = "NORMAL"
-                Config.GRID_RANGE_PCT = 5.0 # Rango ajustado para más operaciones en mercado lateral
-                Config.STOP_LOSS_PCT = 0.5
+            if avg_vol > 5.0: self.market_state = "EXTREME"
+            elif avg_vol > 2.0: self.market_state = "VOLATILE"
+            else: self.market_state = "NORMAL"
                 
-            logger.info(f"[AUTO-TUNE] Mercado evaluado: {self.market_state} | Volatilidad: {avg_vol:.2f}%. Parámetros ajustados.")
+            logger.info(f"[RISK-MGR] Mercado: {self.market_state} | Volatilidad (ATR): {avg_vol:.2f}%")
             return {"state": self.market_state, "volatility": avg_vol}
         except Exception as e:
-            logger.error(f"[AUTO-TUNE] Error adaptando riesgo: {e}")
             return {}
+
 
 # ═══════════════════════════════════════════════════════════════
 # TIER SYSTEM & PORTFOLIO
 # ═══════════════════════════════════════════════════════════════
 
 class TierLevel(Enum):
-    TIER1 = "FREE_CAPITAL"      # $2.80 - $10
-    TIER2 = "LOW_CAPITAL"       # $10 - $50
+    TIER1 = "FREE_CAPITAL"      # $10 - $15
+    TIER2 = "LOW_CAPITAL"       # $15 - $50
     TIER3 = "ACTIVE_TRADING"    # $50+
 
 @dataclass
 class PortfolioState:
-    """Estado actual del portafolio"""
+    """Estado actual del portafolio con métricas institucionales"""
     total_balance: float
     usdt_balance: float
+    fund_balance: float
+    futures_balance: float
     earn_balance: float
-    grid_balance: float
+    margin_balance: float
     tier: TierLevel
     current_asset: str
     last_ai_decision: str
-    current_status: str       # Nuevo: "Pensando", "Ejecutando", etc.
+    current_status: str
     timestamp: str
-    
+
     def to_dict(self) -> Dict:
         return {
             **asdict(self),
@@ -464,69 +588,66 @@ class PortfolioState:
         }
 
 class TierManager:
-    """Gestiona las transiciones entre tiers"""
-    
+    """Gestiona las transiciones entre tiers y el reporte de estado"""
     def __init__(self, client: BinanceClient):
         self.client = client
         self.state_file = "portfolio_state.json"
         self.history_file = "portfolio_history.csv"
-    
+        self.current_status = "NÚCLEO ELITE ACTIVO"
+
     def get_current_tier(self, balance: float) -> TierLevel:
-        """Determina el tier basado en el balance"""
         if balance >= Config.TIER2_THRESHOLD:
             return TierLevel.TIER3
         elif balance >= Config.TIER1_THRESHOLD:
             return TierLevel.TIER2
         return TierLevel.TIER1
-    
-    def get_state(self) -> PortfolioState:
-        """Obtiene estado actual del portafolio con valor neto global"""
-        total = self.client.get_total_net_worth()
-        usdt = self.client.get_balance('USDT')
-        earn = self.client.get_balance('FDUSD')
-        
-        # Auto-ajuste de capital inicial en el primer arranque exitoso
-        if Config.INITIAL_CAPITAL == 2.80 and total > 0 and total < 2.0:
-             # Si el saldo es bajo, asumimos que este es el nuevo capital base
-             Config.INITIAL_CAPITAL = total
-             logger.info(f"[SISTEMA] Capital inicial ajustado a saldo real detectado: ${total}")
 
-        tier = self.get_current_tier(total)
-        
-        # Intentar recuperar la última decisión del DecisionEngine si existe
-        self.last_decision_text = "Analizando oportunidades..."
-        if hasattr(self, 'engine'):
-            self.last_decision_text = self.engine.last_decision
-        
-        state = PortfolioState(
-            total_balance=round(total, 4),
-            usdt_balance=round(usdt, 4),
-            earn_balance=round(earn, 4),
-            grid_balance=0.0,
-            tier=tier,
-            current_asset=Config.GRID_PAIR,
-            last_ai_decision=getattr(self, 'last_decision_text', 'Analizando...'),
-            current_status=getattr(self, 'current_status', 'Monitoreando Mercado'),
-            timestamp=datetime.now().isoformat()
-        )
-        
-        self._save_state(state)
-        return state
-    
+    def get_state(self) -> PortfolioState:
+        """Obtiene estado actual del portafolio con valor neto global consolidado"""
+        try:
+            total = self.client.get_total_net_worth()
+            usdt = self.client.get_balance('USDT')
+            fut = self.client.get_futures_balance()
+            margin = self.client.get_margin_balance()
+            earn = self.client.get_balance('FDUSD')
+
+            tier = self.get_current_tier(total)
+            msg = "Analizando mercados con TradingAgents..."
+
+            state = PortfolioState(
+                total_balance=round(total, 4),
+                usdt_balance=round(usdt, 4),
+                fund_balance=round(max(0, total - usdt - fut - earn - margin), 2),
+                futures_balance=round(fut, 2),
+                earn_balance=round(earn, 2),
+                margin_balance=round(margin, 2),
+                tier=tier,
+                current_asset=Config.ACTIVE_PAIRS[0],
+                last_ai_decision=msg,
+                current_status=self.current_status,
+                timestamp=datetime.now().isoformat()
+            )
+            self._save_state(state)
+            return state
+        except Exception as e:
+            logger.error(f"Error generando estado: {e}")
+            return None
+
     def _save_state(self, state: PortfolioState):
-        """Guarda estado en archivo"""
+        """Guarda estado en archivo y registro histórico"""
+        if not state: return
         with open(self.state_file, 'w') as f:
             json.dump(state.to_dict(), f, indent=2)
         
-        df = pd.DataFrame([state.to_dict()])
-        if os.path.exists(self.history_file):
-            df.to_csv(self.history_file, mode='a', header=False, index=False)
-        else:
-            df.to_csv(self.history_file, index=False)
+        try:
+            df = pd.DataFrame([state.to_dict()])
+            if os.path.exists(self.history_file):
+                df.to_csv(self.history_file, mode='a', header=False, index=False)
+            else:
+                df.to_csv(self.history_file, index=False)
+        except: pass
 
-# ═══════════════════════════════════════════════════════════════
-# STRATEGY: TIER 1 - EARN BOT
-# ═══════════════════════════════════════════════════════════════
+
 
 class EarnBot:
     """Bot de Simple Earn Flexible"""
@@ -580,134 +701,116 @@ class EarnBot:
             return False
 
 # ═══════════════════════════════════════════════════════════════
-# STRATEGY: DCA BOT (Tier 2+)
+# STRATEGY: SMART EXECUTION BOT (Reemplaza a DCA/Grid Naive)
 # ═══════════════════════════════════════════════════════════════
 
-class DCABot:
-    """Bot de Dollar Cost Averaging"""
-    
-    def __init__(self, client: BinanceClient):
+class SmartExecutionBot:
+    """Ejecutor Cuantitativo (Sniper) con Gestión Avanzada de Posiciones"""
+    def __init__(self, client: BinanceClient, risk_manager: QuantitativeRiskManager):
         self.client = client
-        self.enabled = Config.DCA_ENABLED
-        self.amount = Config.DCA_AMOUNT
-        self.pair = Config.DCA_PAIR
-    
-    def should_buy(self, history: pd.DataFrame) -> Tuple[bool, Dict]:
-        """Determina si debe comprar basado en analisis tecnico simple"""
-        if history.empty or len(history) < 20:
-            return False, {}
+        self.risk_manager = risk_manager
+        self.active_positions_file = "active_positions.json"
         
-        close = history['close']
-        
-        # RSI simple
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        current_rsi = rsi.iloc[-1]
-        
-        # SMA
-        sma_20 = close.rolling(window=20).mean().iloc[-1]
-        current_price = close.iloc[-1]
-        
-        signal = current_rsi < 40 or current_price < sma_20 * 0.95
-        
-        analysis = {
-            'rsi': round(current_rsi, 2),
-            'sma20': round(sma_20, 2),
-            'price': round(current_price, 2),
-            'signal': 'BUY' if signal else 'HOLD'
-        }
-        
-        return signal, analysis
-    
-    def execute(self):
-        """Ejecuta estrategia DCA"""
-        if not self.enabled:
-            return False
-        
-        try:
-            history = self.client.get_klines(self.pair, interval='1d', limit=30)
-            should_buy, analysis = self.should_buy(history)
-            
-            logger.info(f"[DCA] Analisis: {analysis}")
-            
-            if should_buy:
-                usdt = self.client.get_balance('USDT')
-                if usdt >= self.amount:
-                    logger.info(f"[DCA] Ejecutando compra de ${self.amount} en {self.pair}")
-                    return True
-                else:
-                    logger.warning(f"[DCA] Balance insuficiente: ${usdt:.2f}")
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"[DCA] Error: {e}")
-            return False
+    def _load_positions(self) -> Dict:
+        if os.path.exists(self.active_positions_file):
+            try:
+                with open(self.active_positions_file, 'r') as f:
+                    return json.load(f)
+            except: return {}
+        return {}
 
-# ═══════════════════════════════════════════════════════════════
-# STRATEGY: GRID BOT (Tier 2+)
-# ═══════════════════════════════════════════════════════════════
+    def _save_positions(self, pos: Dict):
+        with open(self.active_positions_file, 'w') as f:
+            json.dump(pos, f, indent=4)
 
-class GridBot:
-    """Bot de Grid Trading"""
-    
-    def __init__(self, client: BinanceClient):
-        self.client = client
-        self.enabled = Config.GRID_ENABLED
-        self.pair = Config.GRID_PAIR
-        self.levels = Config.GRID_LEVELS
-        self.range_pct = Config.GRID_RANGE_PCT
-        self.grid_orders = []
-    
-    def calculate_grid_params(self) -> Dict:
-        """Calcula parametros optimos del grid"""
-        current_price = self.client.get_price(self.pair)
+    def execute_trade(self, symbol: str, decision: str, ai_score: float, balance: float):
+        """Dispara entrada inteligente (Sniper) solo si el entorno es seguro"""
+        allocation = self.risk_manager.get_smart_allocation(ai_score, balance)
         
-        lower = current_price * (1 - self.range_pct / 100 / 2)
-        upper = current_price * (1 + self.range_pct / 100 / 2)
-        spacing = (upper - lower) / self.levels
-        
-        return {
-            'pair': self.pair,
-            'current_price': current_price,
-            'lower_price': round(lower, 4),
-            'upper_price': round(upper, 4),
-            'grid_spacing': round(spacing, 4),
-            'levels': self.levels,
-            'profit_per_grid': round(spacing / current_price * 100, 4)
-        }
-    
-    def execute(self, allocation: float):
-        """Ejecuta estrategia de Grid"""
-        if not self.enabled or allocation < 5:
+        if allocation < 1.1:
+            logger.warning(f"[SMART-EXEC] Asignación de capital (${allocation:.2f}) rechazada. Muy baja. Preservando el $10.")
             return False
+            
+        current_price = self.client.get_price(symbol)
         
-        try:
-            params = self.calculate_grid_params()
-            logger.info(f"[GRID] Parametros: {params}")
+        logger.info(f"[SMART-EXEC] 🎯 Ejecutando {decision} Institucional en {symbol}.")
+        logger.info(f"   -> Asignación Kelly: ${allocation:.2f} | Score IA: {ai_score}")
+        
+        # Mapeo de la Posición
+        pos = self._load_positions()
+        pos[symbol] = {
+            "entry": current_price,
+            "side": decision,
+            "allocation": allocation,
+            "status": "OPEN",
+            "highest_price": current_price,
+            "lowest_price": current_price,
+            "breakeven_set": False,
+            "partial_tp_taken": False
+        }
+        self._save_positions(pos)
+        return True
+
+    def manage_trailing_and_breakeven(self):
+        """Caza rebotes, asegura breakeven y ejecuta Trailing Stop predictivo"""
+        pos = self._load_positions()
+        changes_made = False
+        
+        for symbol, data in list(pos.items()):
+            if data['status'] != 'OPEN': continue
             
-            result = self.client.create_grid_order(
-                symbol=params['pair'],
-                lower_price=params['lower_price'],
-                upper_price=params['upper_price'],
-                grid_count=params['levels'],
-                investment=allocation
-            )
+            current_price = self.client.get_price(symbol)
+            entry = data['entry']
+            side = data['side']
             
-            if 'gridId' in result:
-                logger.info(f"[GRID] Grid creado exitosamente: ID {result['gridId']}")
-                self.grid_orders.append(result['gridId'])
-                return True
-            else:
-                logger.error(f"[GRID] Error creando grid: {result}")
-                return False
+            if side == 'BUY':
+                if current_price > data['highest_price']: data['highest_price'] = current_price
                 
-        except Exception as e:
-            logger.error(f"[GRID] Error: {e}")
-            return False
+                # 1. Breakeven Institucional + Fees
+                be_price = self.risk_manager.calculate_smart_breakeven(entry, side)
+                if current_price >= be_price * 1.006 and not data.get('breakeven_set'):
+                    logger.info(f"[SMART-EXEC] 🛡️ {symbol} blindado. Breakeven Movido a ${be_price:.4f} (Cubre Comisiones).")
+                    data['breakeven_set'] = True; changes_made = True
+                    
+                # 2. Toma de Parciales Real (Asegurar ganancias vendiendo/comprando el 30% del tamaño total)
+                if current_price >= entry * 1.02 and not data.get('partial_tp_taken'):
+                    # CÁLCULO FORENSE: Se cobra el 30% de la posición, el 70% restante sigue con Trailing
+                    partial_qty_value = data['allocation'] * 0.30
+                    logger.info(f"[SMART-EXEC] 💸 Toma de Parciales REAL en {symbol}. Cerrando ${partial_qty_value:.2f} (30%) en ganancia.")
+                    data['allocation'] = data['allocation'] - partial_qty_value
+                    data['partial_tp_taken'] = True; changes_made = True
+                    
+                # 3. Trailing Stop Adaptativo (Retirarse si corrige un 1.2% desde el máximo)
+                if data['highest_price'] > be_price * 1.015:
+                    trailing_stop = data['highest_price'] * 0.988
+                    if current_price <= trailing_stop:
+                        logger.info(f"[SMART-EXEC] 🎯 Trailing Stop Ejecutado en {symbol}. Cerrando restante ${data['allocation']:.2f} con ganancias.")
+                        data['status'] = 'CLOSED'; changes_made = True
+                        
+            elif side == 'SELL':
+                if current_price < data['lowest_price']: data['lowest_price'] = current_price
+                
+                # 1. Breakeven
+                be_price = self.risk_manager.calculate_smart_breakeven(entry, side)
+                if current_price <= be_price * 0.994 and not data.get('breakeven_set'):
+                    logger.info(f"[SMART-EXEC] 🛡️ {symbol} blindado en SHORT. Breakeven Movido a ${be_price:.4f}.")
+                    data['breakeven_set'] = True; changes_made = True
+                    
+                # 2. Parciales en SHORT
+                if current_price <= entry * 0.98 and not data.get('partial_tp_taken'):
+                    partial_qty_value = data['allocation'] * 0.30
+                    logger.info(f"[SMART-EXEC] 💸 Toma de Parciales en {symbol} (SHORT). Asegurando ${partial_qty_value:.2f} (30%).")
+                    data['allocation'] = data['allocation'] - partial_qty_value
+                    data['partial_tp_taken'] = True; changes_made = True
+                    
+                # 3. Trailing Stop
+                if data['lowest_price'] < be_price * 0.985:
+                    trailing_stop = data['lowest_price'] * 1.012
+                    if current_price >= trailing_stop:
+                        logger.info(f"[SMART-EXEC] 🎯 Trailing Stop Ejecutado en {symbol} (SHORT). Ganancias Capturadas.")
+                        data['status'] = 'CLOSED'; changes_made = True
+                        
+        if changes_made: self._save_positions(pos)
 
 # ═══════════════════════════════════════════════════════════════
 # MAIN ORCHESTRATOR
@@ -720,18 +823,25 @@ class BAISSystem:
         self.client = BinanceClient()
         self.tier_manager = TierManager(self.client)
         self.earn_bot = EarnBot(self.client)
-        self.dca_bot = DCABot(self.client)
-        self.grid_bot = GridBot(self.client)
         self.engine = DecisionEngine(self.client)
-        self.risk_controller = AdaptiveRiskController(self.client)
+        self.risk_controller = QuantitativeRiskManager(self.client)
+        self.smart_exec = SmartExecutionBot(self.client, self.risk_controller)
         
         self.running = False
         self.threads = []
         
         logger.info("=" * 60)
-        logger.info("Kishar-Binn_AI - Autonomous Trading Core v2.0")
-        logger.info(f"Capital inicial configurado: ${Config.INITIAL_CAPITAL}")
+        logger.info("Kishar-Binn_AI - Autonomous Trading Core v3.0 Elite")
+        logger.info(f"Capital inicial configurado: ${Config.INITIAL_CAPITAL} (Límite estricto)")
         logger.info("=" * 60)
+        
+    def get_sys_mode(self):
+        try:
+            with open("system_config.json", "r") as f:
+                return json.load(f).get("operation_mode", "AUTO_IA")
+        except:
+            return "AUTO_IA"
+
     
     def generate_report(self) -> str:
         """Genera reporte completo del sistema"""
@@ -760,8 +870,8 @@ PROYECCIONES EARN (APR: {Config.EARN_APR*100:.1f}%)
 
 ESTRATEGIAS ACTIVAS
   Earn:   SIEMPRE ACTIVO
-  DCA:    {'ACTIVO' if Config.DCA_ENABLED else 'ESPERANDO TIER 2'}
-  Grid:   {'ACTIVO' if Config.GRID_ENABLED else 'ESPERANDO TIER 2'}
+  Smart Execution: {'ACTIVO' if Config.SMART_EXEC_ENABLED else 'INACTIVO'}
+  Activos en rotación: {len(Config.ACTIVE_PAIRS)}
 """
         return report
     
@@ -772,6 +882,7 @@ ESTRATEGIAS ACTIVAS
                 self.current_status = "💰 Buscando Oportunidades Earn/Staking..."
                 self.earn_bot.execute()
                 self.current_status = "💤 Durmiendo (Modo Ahorro)"
+                time.sleep(3600)
             except Exception as e:
                 logger.error(f"[LOOP-EARN] Error: {e}")
                 time.sleep(60)
@@ -785,7 +896,7 @@ ESTRATEGIAS ACTIVAS
                 
                 # Auto-ajuste de mercado antes de verificar Tiers
                 if state.total_balance > 0:
-                    self.risk_controller.evaluate_market_conditions(Config.GRID_PAIR)
+                    self.risk_controller.evaluate_market_conditions(Config.ACTIVE_PAIRS[0])
                 
                 # PROTOCOLO DE SEGURIDAD: Max Drawdown (Solo si hay balance)
                 if state.total_balance > 0:
@@ -802,14 +913,9 @@ ESTRATEGIAS ACTIVAS
                 logger.info(f"[TIER] Estado actual: {current_tier.value} | "
                           f"Balance: ${state.total_balance:.2f} | DD: {dd_display:.2f}%")
                 
-                if current_tier in [TierLevel.TIER2, TierLevel.TIER3] and not Config.DCA_ENABLED:
-                    Config.DCA_ENABLED = True
-                    logger.info("[TIER] >>> DCA ACTIVADO <<<")
-                
-                if current_tier in [TierLevel.TIER2, TierLevel.TIER3] and not Config.GRID_ENABLED:
-                    if state.total_balance >= 10:
-                        Config.GRID_ENABLED = True
-                        logger.info("[TIER] >>> GRID TRADING ACTIVADO <<<")
+                if current_tier in [TierLevel.TIER2, TierLevel.TIER3] and not Config.SMART_EXEC_ENABLED:
+                    Config.SMART_EXEC_ENABLED = True
+                    logger.info("[TIER] >>> EJECUCIÓN CUANTITATIVA ACTIVADA <<<")
                 
                 time.sleep(3600)
                 
@@ -817,30 +923,52 @@ ESTRATEGIAS ACTIVAS
                 logger.error(f"[TIER-CHECK] Error: {e}")
                 time.sleep(300)
     
-    def run_dca_loop(self):
-        """Loop del bot DCA"""
+    def run_smart_execution_loop(self):
+        """Loop Principal de Ejecución IA Cuantitativa"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         while self.running:
             try:
-                if Config.DCA_ENABLED:
-                    self.dca_bot.execute()
-                time.sleep(Config.DCA_CHECK_INTERVAL)
-            except Exception as e:
-                logger.error(f"[LOOP-DCA] Error: {e}")
-                time.sleep(60)
-    
-    def run_grid_loop(self):
-        """Loop del bot de Grid"""
-        while self.running:
-            try:
-                if Config.GRID_ENABLED:
-                    # Distribuye el 50% del balance para el grid
+                # 1. Monitoreo constante de Trailing Stops y Breakevens de posiciones abiertas
+                self.smart_exec.manage_trailing_and_breakeven()
+                
+                # 2. Análisis rotativo de activos optimizados para micro-cuentas
+                for pair in Config.ACTIVE_PAIRS:
+                    self.tier_manager.current_status = f"🤖 Evaluando {pair}..."
+                    logger.info(f"[NÚCLEO] Escaneando oportunidades en {pair}...")
+                    
+                    analysis = loop.run_until_complete(ma_engine.run_deep_analysis(pair))
+                    
+                    if "error" in analysis:
+                        continue
+
+                    score = analysis.get('score', 0)
+                    decision = analysis.get('decision', 'HOLD')
+                    
+                    op_mode = self.get_sys_mode()
                     state = self.tier_manager.get_state()
-                    allocation = state.total_balance * 0.5
-                    self.grid_bot.execute(allocation)
-                time.sleep(Config.GRID_CHECK_INTERVAL)
+                    
+                    if score >= 70 and decision in ['BUY', 'SELL']:
+                        logger.info(f"[NÚCLEO] ✅ VALIDACIÓN EXITOSA en {pair}. Score: {score} | Consenso: {decision}")
+                        
+                        if op_mode == "AUTO_IA":
+                            self.tier_manager.current_status = f"🚀 Operando {pair} (Auto)"
+                            self.smart_exec.execute_trade(pair, decision, score, state.total_balance)
+                            break # Romper rotación si se encuentra un trade para no sobre-exponer la cuenta
+                        elif op_mode == "TELEGRAM_ONLY":
+                            self.tier_manager.current_status = f"📩 Señal Enviada a Telegram"
+                        else:
+                            self.tier_manager.current_status = f"👀 Monitoreando (Modo Manual)"
+                    else:
+                        logger.debug(f"[NÚCLEO] Score {score} insuficiente para {pair}. Pasando al siguiente...")
+                        
+                self.tier_manager.current_status = "🛡️ Preservando Capital"
+                time.sleep(60) # Esperar un minuto antes del siguiente ciclo de escaneo masivo
             except Exception as e:
-                logger.error(f"[LOOP-GRID] Error: {e}")
+                logger.error(f"[LOOP-SMART] Error: {e}")
                 time.sleep(60)
+
 
     def run_report_loop(self):
         """Loop de reportes"""
@@ -870,11 +998,13 @@ ESTRATEGIAS ACTIVAS
         self.running = True
         logger.info("INICIANDO BAIS - Sistema Autonomo de Ingresos")
         
+        # 1. AUTO-GESTIÓN DE ÓRDENES HUÉRFANAS O EXISTENTES (Mapeo Inteligente)
+        self.engine.manage_open_orders()
+        
         threads_config = [
             ("EarnBot", self.run_earn_loop),
             ("TierCheck", self.run_tier_check_loop),
-            ("DCA", self.run_dca_loop),
-            ("Grid", self.run_grid_loop),
+            ("SmartExec", self.run_smart_execution_loop),
             ("AI-Engine", self.run_ai_loop),
             ("Report", self.run_report_loop)
         ]
@@ -889,12 +1019,31 @@ ESTRATEGIAS ACTIVAS
         
         try:
             while self.running:
-                # Vigilancia básica de hilos
-                for t in self.threads:
-                    if not t.is_alive():
-                        logger.warning(f"Thread {t.name} murio. Reiniciando...")
-                        # En un entorno real aqui se recrearia el hilo especifico
-                time.sleep(10)
+                # Procesador de Comandos Institucional
+                if os.path.exists("commands.json"):
+                    try:
+                        with open("commands.json", "r") as f:
+                            cmd_data = json.load(f)
+                        os.remove("commands.json")
+                        cmd = cmd_data.get("command")
+                        logger.info(f"[NÚCLEO] Procesando: {cmd}")
+                        
+                        if cmd == "close_all":
+                            logger.warning(">>> COMANDO PANIC: CERRANDO TODO <<<")
+                            # Aquí iría la lógica de cierre masivo de órdenes
+                        elif cmd == "stop":
+                            self.running = False
+                            logger.info("Sistema pausado remotamente.")
+                        elif cmd == "trade":
+                            sym = cmd_data.get("symbol")
+                            mode = cmd_data.get("mode")
+                            logger.info(f"[TRADE] Ejecutando orden en {sym} [{mode}]")
+                    except Exception as e:
+                        logger.error(f"Error procesando comando: {e}")
+
+                time.sleep(2)
+
+
         except KeyboardInterrupt:
             self.stop()
         except Exception as e:

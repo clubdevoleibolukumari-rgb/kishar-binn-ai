@@ -28,3 +28,5 @@ build/
 # Archivos temporales OS
 .DS_Store
 Thumbs.db
+
+.vercel
